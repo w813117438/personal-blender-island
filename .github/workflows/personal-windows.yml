@@ -1,0 +1,83 @@
+name: Personal Blender - Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [personal]
+    paths-ignore:
+      - '**/*.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - name: Build and smoke test
+        run: |
+          & ./tools/local-build/Build-Blender.ps1 -NoLaunch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package MSI and portable ZIP
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $build = Join-Path $env:GITHUB_WORKSPACE '.local-build/build-full'
+          $output = Join-Path $env:GITHUB_WORKSPACE '.local-build/packages'
+          New-Item -ItemType Directory -Force $output | Out-Null
+          $portable = Join-Path $env:GITHUB_WORKSPACE '.local-build/tools/cmake-3.31.8-windows-x86_64/bin/cpack.exe'
+          $cpack = if (Test-Path $portable) { $portable } else { (Get-Command cpack.exe -ErrorAction Stop).Source }
+          $wix = Get-ChildItem "${env:ProgramFiles(x86)}/WiX Toolset*/bin/candle.exe" | Select-Object -First 1
+          if (!$wix) { throw 'WiX 3 is required to create the MSI installer.' }
+          $env:PATH = $wix.DirectoryName + ';' + $env:PATH
+          Push-Location $build
+          try {
+            & $cpack -G WIX -C Release --config CPackConfig.cmake -B $output
+            if ($LASTEXITCODE -ne 0) { throw 'MSI packaging failed.' }
+          } finally { Pop-Location }
+          $zip = Join-Path $output "blender-personal-windows-x64-$($env:GITHUB_SHA.Substring(0,8)).zip"
+          & 7z a -tzip $zip "$build/bin/Release/*" -mx=3
+          if ($LASTEXITCODE -ne 0) { throw 'ZIP packaging failed.' }
+          $packages = @(Get-ChildItem $output -File | Where-Object Extension -in '.msi','.zip')
+          if (!($packages | Where-Object Extension -eq '.msi')) { throw 'MSI output is missing.' }
+          $packages | Get-FileHash -Algorithm SHA256 | ForEach-Object {
+            '{0}  {1}' -f $_.Hash, (Split-Path $_.Path -Leaf)
+          } | Set-Content (Join-Path $output 'SHA256SUMS.txt')
+
+      - name: Upload install packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-personal-windows-x64-${{ github.run_number }}
+          path: |
+            .local-build/packages/*.msi
+            .local-build/packages/*.zip
+            .local-build/packages/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-logs-${{ github.run_number }}
+          path: |
+            .local-build/logs/*.log
+            .local-build/build-full/Build.log
+            .local-build/build-full/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 7
