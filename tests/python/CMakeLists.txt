@@ -214,6 +214,11 @@ add_system_python_test(
 # GENERAL PYTHON CORRECTNESS TESTS
 # ------------------------------------------------------------------------------
 
+add_blender_test_allow_error(
+  view3d_cursor_world_snap
+  --python ${CMAKE_CURRENT_LIST_DIR}/view3d_cursor_world_snap.py
+)
+
 add_blender_test(
   script_load_keymap
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_keymap_completeness.py

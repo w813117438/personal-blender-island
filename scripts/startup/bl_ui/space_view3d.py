@@ -1479,17 +1479,29 @@ class VIEW3D_MT_mirror(Menu):
 class VIEW3D_MT_snap(Menu):
     bl_label = "Snap"
 
-    def draw(self, _context):
+    def draw(self, context):
         layout = self.layout
 
         layout.operator("view3d.snap_selected_to_grid", text="Selection to Grid")
-        layout.operator("view3d.snap_selected_to_cursor", text="Selection to Cursor").use_offset = False
-        layout.operator("view3d.snap_selected_to_cursor", text="Selection to Cursor (Keep Offset)").use_offset = True
+        props = layout.operator("view3d.snap_selected_to_cursor", text="Selection to Cursor")
+        props.use_offset, props.use_rotation = False, False
+        props = layout.operator("view3d.snap_selected_to_cursor", text="Selection to Cursor (Keep Offset)")
+        props.use_offset, props.use_rotation = True, False
+        if context.mode in {'OBJECT', 'POSE'}:
+            props = layout.operator(
+                "view3d.snap_selected_to_cursor", text="Selection to Cursor (World Location & Rotation)",
+            )
+            props.use_offset = False
+            props.use_rotation = True
         layout.operator("view3d.snap_selected_to_active", text="Selection to Active")
 
         layout.separator()
 
-        layout.operator("view3d.snap_cursor_to_selected", text="Cursor to Selected")
+        layout.operator("view3d.snap_cursor_to_selected", text="Cursor to Selected").use_rotation = False
+        if context.mode in {'OBJECT', 'POSE'}:
+            layout.operator(
+                "view3d.snap_cursor_to_selected", text="Cursor to Selected (World Location & Rotation)",
+            ).use_rotation = True
         layout.operator("view3d.snap_cursor_to_center", text="Cursor to World Origin")
         layout.operator("view3d.snap_cursor_to_grid", text="Cursor to Grid")
         layout.operator("view3d.snap_cursor_to_active", text="Cursor to Active")
@@ -6290,23 +6302,39 @@ class VIEW3D_MT_orientations_pie(Menu):
 class VIEW3D_MT_snap_pie(Menu):
     bl_label = "Snap"
 
-    def draw(self, _context):
+    def draw(self, context):
         layout = self.layout
         pie = layout.menu_pie()
 
         pie.operator("view3d.snap_cursor_to_grid", text="Cursor to Grid", icon='CURSOR')
         pie.operator("view3d.snap_selected_to_grid", text="Selection to Grid", icon='RESTRICT_SELECT_OFF')
-        pie.operator("view3d.snap_cursor_to_selected", text="Cursor to Selected", icon='CURSOR')
-        pie.operator(
+        cursor_column = pie.column()
+        cursor_column.operator(
+            "view3d.snap_cursor_to_selected", text="Cursor to Selected", icon='CURSOR',
+        ).use_rotation = False
+        if context.mode in {'OBJECT', 'POSE'}:
+            cursor_column.operator(
+                "view3d.snap_cursor_to_selected", text="Cursor to Selected (World Location & Rotation)", icon='CURSOR',
+            ).use_rotation = True
+        selection_column = pie.column()
+        props = selection_column.operator(
             "view3d.snap_selected_to_cursor",
             text="Selection to Cursor",
             icon='RESTRICT_SELECT_OFF',
-        ).use_offset = False
-        pie.operator(
+        )
+        props.use_offset, props.use_rotation = False, False
+        if context.mode in {'OBJECT', 'POSE'}:
+            props = selection_column.operator(
+                "view3d.snap_selected_to_cursor", text="Selection to Cursor (World Location & Rotation)",
+                icon='RESTRICT_SELECT_OFF',
+            )
+            props.use_offset, props.use_rotation = False, True
+        props = pie.operator(
             "view3d.snap_selected_to_cursor",
             text="Selection to Cursor (Keep Offset)",
             icon='RESTRICT_SELECT_OFF',
-        ).use_offset = True
+        )
+        props.use_offset, props.use_rotation = True, False
         pie.operator("view3d.snap_selected_to_active", text="Selection to Active", icon='RESTRICT_SELECT_OFF')
         pie.operator("view3d.snap_cursor_to_center", text="Cursor to World Origin", icon='CURSOR')
         pie.operator("view3d.snap_cursor_to_active", text="Cursor to Active", icon='CURSOR')

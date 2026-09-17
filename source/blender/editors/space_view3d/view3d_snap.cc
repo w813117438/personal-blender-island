@@ -6,7 +6,12 @@
  * \ingroup spview3d
  */
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+
 #include "DNA_armature_types.h"
+#include "DNA_constraint_types.h"
 #include "DNA_meta_types.h"
 #include "DNA_object_types.h"
 #include "DNA_pointcloud_types.h"
@@ -15,6 +20,7 @@
 #include "BLI_listbase.hh"
 #include "BLI_math_matrix.hh"
 #include "BLI_math_matrix_c.hh"
+#include "BLI_math_quaternion.hh"
 #include "BLI_math_rotation_c.hh"
 #include "BLI_math_vector.hh"
 #include "BLI_math_vector_c.hh"
@@ -62,7 +68,10 @@
 
 namespace blender {
 
-static bool snap_curs_to_sel_ex(bContext *C, const int pivot_point, float r_cursor[3]);
+static bool snap_curs_to_sel_ex(bContext *C,
+                                const int pivot_point,
+                                float r_cursor[3],
+                                bool use_all_pose_objects = false);
 static bool snap_calc_active_center(bContext *C, const bool select_only, float r_center[3]);
 
 /* -------------------------------------------------------------------- */
@@ -300,6 +309,354 @@ static bool pose_bone_runtime_flag_test_recursive(const bPoseChannel *pose_bone,
   return false;
 }
 
+struct SnapLocalTransform {
+  float3 location;
+  float4 rotation;
+};
+
+using SnapResidual = std::array<double, 6>;
+
+static SnapResidual snap_world_residual(const float4x4 &world, const float4x4 &target)
+{
+  float current[4], desired_inverse[4], delta[4];
+  mat4_to_quat(current, world.ptr());
+  mat4_to_quat(desired_inverse, target.ptr());
+  invert_qt_normalized(desired_inverse);
+  mul_qt_qtqt(delta, current, desired_inverse);
+  normalize_qt(delta);
+  if (delta[0] < 0.0f) {
+    mul_v4_fl(delta, -1.0f);
+  }
+  const double sine = len_v3(delta + 1);
+  const double factor = sine > 1e-8 ? 2.0 * std::atan2(sine, delta[0]) / sine : 2.0;
+  const float3 offset = world.location() - target.location();
+  return {offset.x, offset.y, offset.z, delta[1] * factor, delta[2] * factor, delta[3] * factor};
+}
+
+static bool snap_world_matches(const SnapResidual &residual)
+{
+  return residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2] <
+             1e-10 &&
+         residual[3] * residual[3] + residual[4] * residual[4] + residual[5] * residual[5] < 1e-8;
+}
+
+static SnapLocalTransform snap_local_step(const SnapLocalTransform &base, const double step[6])
+{
+  SnapLocalTransform result = base;
+  for (int i = 0; i < 3; i++) {
+    result.location[i] += float(step[i]);
+  }
+  float axis[3] = {float(step[3]), float(step[4]), float(step[5])};
+  const float angle = normalize_v3(axis);
+  if (angle != 0.0f) {
+    float delta[4];
+    axis_angle_to_quat(delta, axis, angle);
+    mul_qt_qtqt(result.rotation, delta, base.rotation);
+    normalize_qt(result.rotation);
+  }
+  return result;
+}
+
+/** Refine local location/rotation against the fully evaluated world result. Scale is fixed.
+ * Finite differences include constraint influence, parent transforms, and channel locks. */
+template<typename GetLocal, typename SetLocal, typename Evaluate>
+static bool snap_world_refine(const float4x4 &target,
+                              GetLocal get_local,
+                              SetLocal set_local,
+                              Evaluate evaluate)
+{
+  const auto cost = [](const SnapResidual &residual) {
+    double value = 0.0;
+    for (double component : residual) {
+      value += component * component;
+    }
+    return value;
+  };
+  double damping = 1e-4;
+  for (int iteration = 0; iteration < 24; iteration++) {
+    const SnapResidual residual = snap_world_residual(evaluate(), target);
+    if (snap_world_matches(residual)) {
+      return true;
+    }
+    const double old_cost = cost(residual);
+    if (!std::isfinite(old_cost)) {
+      return false;
+    }
+    const SnapLocalTransform base = get_local();
+    double jacobian[6][6];
+    for (int column = 0; column < 6; column++) {
+      double step[6] = {};
+      step[column] = column < 3 ? 1e-3 * std::max(1.0f, std::abs(base.location[column])) :
+                                  1e-3;
+      set_local(snap_local_step(base, step));
+      const SnapResidual perturbed = snap_world_residual(evaluate(), target);
+      for (int row = 0; row < 6; row++) {
+        jacobian[row][column] = (perturbed[row] - residual[row]) / step[column];
+      }
+    }
+    set_local(base);
+    bool improved = false;
+    for (int attempt = 0; attempt < 8; attempt++) {
+      /* Damped least squares, solved with partial pivoting on the six local degrees of freedom. */
+      double system[6][7] = {};
+      for (int i = 0; i < 6; i++) {
+        for (int j = 0; j < 6; j++) {
+          for (int k = 0; k < 6; k++) {
+            system[i][j] += jacobian[k][i] * jacobian[k][j];
+          }
+        }
+        system[i][i] += damping * std::max(system[i][i], 1e-6);
+        for (int k = 0; k < 6; k++) {
+          system[i][6] -= jacobian[k][i] * residual[k];
+        }
+      }
+      for (int column = 0; column < 6; column++) {
+        int pivot = column;
+        for (int row = column + 1; row < 6; row++) {
+          if (std::abs(system[row][column]) > std::abs(system[pivot][column])) {
+            pivot = row;
+          }
+        }
+        for (int j = column; j < 7; j++) {
+          std::swap(system[column][j], system[pivot][j]);
+        }
+        const double divisor = system[column][column];
+        for (int j = column; j < 7; j++) {
+          system[column][j] /= divisor;
+        }
+        for (int row = 0; row < 6; row++) {
+          if (row != column) {
+            const double factor = system[row][column];
+            for (int j = column; j < 7; j++) {
+              system[row][j] -= factor * system[column][j];
+            }
+          }
+        }
+      }
+      double step[6];
+      bool finite = true;
+      for (int i = 0; i < 6; i++) {
+        step[i] = system[i][6];
+        finite &= std::isfinite(step[i]);
+      }
+      if (!finite) {
+        set_local(base);
+        return false;
+      }
+      const double angle = std::sqrt(step[3] * step[3] + step[4] * step[4] + step[5] * step[5]);
+      if (angle > 1.0) {
+        for (double &component : step) {
+          component /= angle;
+        }
+      }
+      set_local(snap_local_step(base, step));
+      const SnapResidual candidate = snap_world_residual(evaluate(), target);
+      if (cost(candidate) < old_cost) {
+        damping = std::max(damping * 0.25, 1e-8);
+        improved = true;
+        break;
+      }
+      damping *= 10.0;
+      set_local(base);
+    }
+    if (!improved) {
+      return false;
+    }
+  }
+  return snap_world_matches(snap_world_residual(evaluate(), target));
+}
+
+/** Snap selected pose bone heads and orientations to a world transform, preserving bone scale. */
+static bool snap_pose_to_world_transform(bContext *C,
+                                         wmOperator *op,
+                                         const float4x4 &target_world,
+                                         const bool use_toolsettings)
+{
+  Scene *scene = CTX_data_scene(C);
+  Main *bmain = CTX_data_main(C);
+  Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
+  Vector<Object *> objects = BKE_object_pose_array_get(
+      *bmain, scene, CTX_data_view_layer(C), CTX_wm_view3d(C));
+  bool changed = false;
+  bool incomplete = false;
+  struct PoseBackup {
+    Object *object;
+    bPoseChannel *channel;
+    float3 location, euler, axis;
+    float4 quaternion;
+    float angle;
+  };
+  Vector<PoseBackup> backups;
+
+  for (Object *ob : objects) {
+    bArmature *arm = id_cast<bArmature *>(ob->data);
+    Vector<bPoseChannel *> channels;
+    for (bPoseChannel &pchan : ob->pose->chanbase) {
+      if ((pchan.flag & POSE_SELECTED) &&
+          animrig::bone_is_visible(arm, {&pchan, pchan.bone_get(*ob)}))
+      {
+        channels.append(&pchan);
+      }
+    }
+    const auto parent_depth = [](const bPoseChannel *pchan) {
+      int depth = 0;
+      for (const bPoseChannel *parent = pchan->parent; parent; parent = parent->parent) {
+        depth++;
+      }
+      return depth;
+    };
+    std::stable_sort(channels.begin(), channels.end(), [&](const auto *a, const auto *b) {
+      return parent_depth(a) < parent_depth(b);
+    });
+
+    for (bPoseChannel *pchan : channels) {
+      backups.append({ob,
+                      pchan,
+                      float3(pchan->loc),
+                      float3(pchan->eul),
+                      float3(pchan->rotAxis),
+                      float4(pchan->quat),
+                      pchan->rotAngle});
+      /* Refresh the pose after each parent, including unselected intermediate bones. */
+      BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+      Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
+      bPoseChannel *pchan_eval = BKE_pose_channel_find_name(ob_eval->pose, pchan->name);
+      bool use_constraint_inverse = false;
+      for (const bConstraint &constraint : pchan_eval->constraints) {
+        if ((constraint.flag & (CONSTRAINT_OFF | CONSTRAINT_DISABLE)) || constraint.enforce == 0.0f) {
+          continue;
+        }
+        /* Full Child Of constraints form an invertible parenting transform. Other constraints
+         * can depend on the current owner transform, so their cached delta is not a general inverse. */
+        if (constraint.type != CONSTRAINT_TYPE_CHILDOF || constraint.enforce != 1.0f ||
+            (static_cast<const bChildOfConstraint *>(constraint.data)->flag & CHILDOF_ALL) !=
+                CHILDOF_ALL)
+        {
+          use_constraint_inverse = false;
+          break;
+        }
+        use_constraint_inverse = true;
+      }
+      float4x4 unconstrained_world = target_world;
+      if (use_constraint_inverse) {
+        /* constinv is in world space and includes the evaluated targets and Set Inverse matrix.
+         * Remove that transform before converting the requested world matrix to bone channels. */
+        mul_m4_m4m4(unconstrained_world.ptr(), pchan_eval->constinv, target_world.ptr());
+      }
+      float object_inverse[4][4], target_pose[4][4], target_local[4][4];
+      if (!invert_m4_m4(object_inverse, ob_eval->object_to_world().ptr())) {
+        incomplete = true;
+        continue;
+      }
+      mul_m4_m4m4(target_pose, object_inverse, unconstrained_world.ptr());
+      BKE_armature_mat_pose_to_bone(
+          {pchan_eval, pchan_eval->bone_get(*ob_eval)}, target_pose, target_local);
+
+      float location[3], rotation[3][3], scale[3];
+      mat4_to_loc_rot_size(location, rotation, scale, target_local);
+      /* Connected heads belong to the parent tail; keep the connection and still rotate. */
+      if (!(pchan->bone_get(*ob)->flag & BONE_CONNECTED)) {
+        if (use_toolsettings) {
+          BKE_pchan_protected_location_set(pchan, location);
+        }
+        else {
+          copy_v3_v3(pchan->loc, location);
+        }
+      }
+      if (use_toolsettings) {
+        BKE_pchan_protected_rotation_set(pchan, rotation);
+      }
+      else {
+        BKE_pchan_mat3_to_rot(pchan, rotation, true);
+      }
+      DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
+      const auto get_local = [&]() -> SnapLocalTransform {
+        return {float3(pchan->loc), BKE_pchan_rot_to_quat(*pchan)};
+      };
+      const auto set_local = [&](const SnapLocalTransform &state) {
+        float rotation_matrix[3][3];
+        quat_to_mat3(rotation_matrix, state.rotation);
+        if (!(pchan->bone_get(*ob)->flag & BONE_CONNECTED)) {
+          if (use_toolsettings) {
+            BKE_pchan_protected_location_set(pchan, state.location);
+          }
+          else {
+            copy_v3_v3(pchan->loc, state.location);
+          }
+        }
+        if (use_toolsettings) {
+          BKE_pchan_protected_rotation_set(pchan, rotation_matrix);
+        }
+        else {
+          BKE_pchan_mat3_to_rot(pchan, rotation_matrix, true);
+        }
+        DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
+      };
+      const auto evaluate = [&]() {
+        BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+        const Object *evaluated_object = DEG_get_evaluated(depsgraph, ob);
+        const bPoseChannel *evaluated_channel = BKE_pose_channel_find_name(
+            evaluated_object->pose, pchan->name);
+        float4x4 world;
+        mul_m4_m4m4(
+            world.ptr(), evaluated_object->object_to_world().ptr(), evaluated_channel->pose_mat);
+        return world;
+      };
+      incomplete |= !snap_world_refine(target_world, get_local, set_local, evaluate);
+      changed = true;
+    }
+
+    BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+    Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
+    for (const bPoseChannel *pchan : channels) {
+      const bPoseChannel *pchan_eval = BKE_pose_channel_find_name(ob_eval->pose, pchan->name);
+      float world[4][4];
+      mul_m4_m4m4(world, ob_eval->object_to_world().ptr(), pchan_eval->pose_mat);
+      incomplete |= !snap_world_matches(snap_world_residual(float4x4(world), target_world));
+    }
+  }
+  /* Verify again after all armatures, since a constraint may target another selected rig. */
+  BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+  for (const PoseBackup &backup : backups) {
+    const Object *evaluated = DEG_get_evaluated(depsgraph, backup.object);
+    const bPoseChannel *pchan = BKE_pose_channel_find_name(evaluated->pose, backup.channel->name);
+    float4x4 world;
+    mul_m4_m4m4(world.ptr(), evaluated->object_to_world().ptr(), pchan->pose_mat);
+    incomplete |= !snap_world_matches(snap_world_residual(world, target_world));
+  }
+  if (incomplete) {
+    for (const PoseBackup &backup : backups) {
+      copy_v3_v3(backup.channel->loc, backup.location);
+      copy_v3_v3(backup.channel->eul, backup.euler);
+      copy_v3_v3(backup.channel->rotAxis, backup.axis);
+      copy_v4_v4(backup.channel->quat, backup.quaternion);
+      backup.channel->rotAngle = backup.angle;
+      DEG_id_tag_update(&backup.object->id, ID_RECALC_GEOMETRY);
+    }
+    BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+    BKE_report(op->reports,
+               RPT_ERROR,
+               "Cannot reach the requested world transform; original pose restored. Check "
+               "connected bones, locks, or overriding constraints");
+    return false;
+  }
+  if (changed && use_toolsettings) {
+    if (animrig::is_autokey_on(scene)) {
+      ANIM_deselect_keys_in_animation_editors(C);
+    }
+    for (const PoseBackup &backup : backups) {
+      for (const char *keying_id : {ANIM_KS_LOCATION_ID, ANIM_KS_ROTATION_ID}) {
+        KeyingSet *ks = animrig::get_keyingset_for_autokeying(scene, keying_id);
+        animrig::autokeyframe_pchan(C, scene, backup.object, backup.channel, ks);
+      }
+    }
+  }
+  if (changed) {
+    WM_event_add_notifier(C, NC_OBJECT | ND_POSE, nullptr);
+  }
+  return changed;
+}
+
 /**
  * Snaps the selection as a whole (use_offset=true) or each selected object to the given location.
  *
@@ -340,6 +697,12 @@ static bool snap_selected_to_location_rotation(bContext *C,
   const float3x3 target_rot_global = target_orientation_global ?
                                          target_orientation_global->matrix<float3x3>() :
                                          float3x3::zero();
+
+  if (use_rotation && !use_offset && OBPOSE_FROM_OBACT(obact)) {
+    float4x4 target_world = target_orientation_global->matrix<float4x4>();
+    target_world.location() = target_loc_global;
+    return snap_pose_to_world_transform(C, op, target_world, use_toolsettings);
+  }
 
   if (use_offset) {
     if ((pivot_point == V3D_AROUND_ACTIVE) && snap_calc_active_center(C, true, center_global)) {
@@ -544,6 +907,30 @@ static bool snap_selected_to_location_rotation(bContext *C,
       FOREACH_SELECTED_EDITABLE_OBJECT_END;
     }
 
+    if (use_rotation && !use_offset) {
+      /* Parents must reach their target before converting a child's world target to local space. */
+      const auto parent_depth = [](const Object *ob) {
+        int depth = 0;
+        for (const Object *parent = ob->parent; parent; parent = parent->parent) {
+          depth++;
+        }
+        return depth;
+      };
+      std::stable_sort(objects.begin(), objects.end(), [&](const Object *a, const Object *b) {
+        return parent_depth(a) < parent_depth(b);
+      });
+    }
+
+    Vector<ObjectTfmProtectedChannels> snap_backups;
+    bool world_snap_failed = false;
+    if (use_rotation && !use_offset) {
+      for (Object *ob : objects) {
+        ObjectTfmProtectedChannels backup;
+        BKE_object_tfm_protected_backup(ob, &backup);
+        snap_backups.append(backup);
+      }
+    }
+
     const bool use_transform_skip_children = use_toolsettings &&
                                              (scene->toolsettings->transform_flag &
                                               SCE_XFORM_SKIP_CHILDREN);
@@ -568,7 +955,7 @@ static bool snap_selected_to_location_rotation(bContext *C,
       }
     }
 
-    if (animrig::is_autokey_on(scene)) {
+    if (animrig::is_autokey_on(scene) && !(use_rotation && !use_offset)) {
       ANIM_deselect_keys_in_animation_editors(C);
     }
 
@@ -579,6 +966,42 @@ static bool snap_selected_to_location_rotation(bContext *C,
         if (ob->parent && BKE_object_flag_test_recursive(ob->parent, OB_DONE)) {
           continue;
         }
+      }
+
+      if (use_rotation && !use_offset) {
+        BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+        Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
+        const float3 scale_original = float3(ob->scale);
+        ObjectTfmProtectedChannels protected_channels;
+        BKE_object_tfm_protected_backup(ob, &protected_channels);
+
+        const float4x4 target = target_orientation_global->matrix<float4x4>();
+        /* Convert world position and rotation together, including parent inverse and deltas. */
+        BKE_object_apply_mat4_ex(ob, target.ptr(), ob_eval->parent, ob->parentinv, true);
+        copy_v3_v3(ob->scale, scale_original);
+        if (use_toolsettings) {
+          BKE_object_tfm_protected_restore(ob, &protected_channels, ob->protectflag);
+        }
+        DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
+        const auto get_local = [&]() -> SnapLocalTransform {
+          return {float3(ob->loc), BKE_object_rot_to_quat(*ob)};
+        };
+        const auto set_local = [&](const SnapLocalTransform &state) {
+          ObjectTfmProtectedChannels locked;
+          BKE_object_tfm_protected_backup(ob, &locked);
+          copy_v3_v3(ob->loc, state.location);
+          BKE_object_quat_to_rot(*ob, state.rotation);
+          if (use_toolsettings) {
+            BKE_object_tfm_protected_restore(ob, &locked, ob->protectflag);
+          }
+          DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
+        };
+        const auto evaluate = [&]() {
+          BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+          return DEG_get_evaluated(depsgraph, ob)->object_to_world();
+        };
+        world_snap_failed |= !snap_world_refine(target, get_local, set_local, evaluate);
+        continue;
       }
 
       float3 target_loc_local; /* parent-relative */
@@ -684,6 +1107,36 @@ static bool snap_selected_to_location_rotation(bContext *C,
       DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
     }
 
+    if (use_rotation && !use_offset) {
+      BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+      const float4x4 target = target_orientation_global->matrix<float4x4>();
+      for (Object *ob : objects) {
+        world_snap_failed |= !snap_world_matches(
+            snap_world_residual(DEG_get_evaluated(depsgraph, ob)->object_to_world(), target));
+      }
+      if (world_snap_failed) {
+        for (const int index : objects.index_range()) {
+          BKE_object_tfm_protected_restore(objects[index],
+                                          &snap_backups[index],
+                                          OB_LOCK_LOC | OB_LOCK_ROT | OB_LOCK_SCALE |
+                                              OB_LOCK_ROT4D | OB_LOCK_ROTW);
+          DEG_id_tag_update(&objects[index]->id, ID_RECALC_TRANSFORM);
+        }
+        BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
+      }
+      else if (use_toolsettings) {
+        if (animrig::is_autokey_on(scene)) {
+          ANIM_deselect_keys_in_animation_editors(C);
+        }
+        for (Object *ob : objects) {
+          for (const char *keying_id : {ANIM_KS_LOCATION_ID, ANIM_KS_ROTATION_ID}) {
+            KeyingSet *snap_ks = animrig::get_keyingset_for_autokeying(scene, keying_id);
+            animrig::autokeyframe_object(C, scene, ob, snap_ks);
+          }
+        }
+      }
+    }
+
     if (use_transform_skip_children) {
       object::object_xform_skip_child_container_update_all(xcs, bmain, depsgraph);
       object::object_xform_skip_child_container_destroy(xcs);
@@ -691,6 +1144,13 @@ static bool snap_selected_to_location_rotation(bContext *C,
     if (use_transform_data_origin) {
       object::data_xform_container_update_all(xds, bmain, depsgraph);
       object::data_xform_container_destroy(xds);
+    }
+    if (world_snap_failed) {
+      BKE_report(op->reports,
+                 RPT_ERROR,
+                 "Cannot reach the requested world transform; original objects restored. Check "
+                 "locks or overriding constraints");
+      return false;
     }
   }
 
@@ -904,7 +1364,10 @@ static void bundle_midpoint(Scene *scene, Object *ob, float r_vec[3])
 }
 
 /** Snaps the 3D cursor location to the median point of the selection. */
-static bool snap_curs_to_sel_ex(bContext *C, const int pivot_point, float r_cursor[3])
+static bool snap_curs_to_sel_ex(bContext *C,
+                                const int pivot_point,
+                                float r_cursor[3],
+                                const bool use_all_pose_objects)
 {
   Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
   ViewLayer *view_layer_eval = DEG_get_evaluated_view_layer(depsgraph);
@@ -961,13 +1424,22 @@ static bool snap_curs_to_sel_ex(bContext *C, const int pivot_point, float r_curs
     Object *obact = CTX_data_active_object(C);
 
     if (obact && (obact->mode & OB_MODE_POSE)) {
-      Object *obact_eval = DEG_get_evaluated(depsgraph, obact);
-      bArmature *arm = id_cast<bArmature *>(obact_eval->data);
-      for (bPoseChannel &pchan : obact_eval->pose->chanbase) {
-        if (ANIM_bonecoll_is_visible_pchan(arm, &pchan)) {
-          if (pchan.flag & POSE_SELECTED) {
+      Vector<Object *> objects;
+      if (use_all_pose_objects) {
+        objects = BKE_object_pose_array_get(*bmain, scene, CTX_data_view_layer(C), v3d);
+      }
+      else {
+        objects.append(obact);
+      }
+      for (Object *ob : objects) {
+        Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
+        bArmature *arm = id_cast<bArmature *>(ob_eval->data);
+        for (bPoseChannel &pchan : ob_eval->pose->chanbase) {
+          if ((pchan.flag & POSE_SELECTED) &&
+              animrig::bone_is_visible(arm, {&pchan, pchan.bone_get(*ob_eval)}))
+          {
             copy_v3_v3(vec, pchan.pose_head);
-            mul_m4_v3(obact_eval->object_to_world().ptr(), vec);
+            mul_m4_v3(ob_eval->object_to_world().ptr(), vec);
             add_v3_v3(centroid, vec);
             minmax_v3v3_v3(min, max, vec);
             count++;
@@ -1009,11 +1481,38 @@ static bool snap_curs_to_sel_ex(bContext *C, const int pivot_point, float r_curs
   return true;
 }
 
-static wmOperatorStatus snap_curs_to_sel_exec(bContext *C, wmOperator * /*op*/)
+static wmOperatorStatus snap_curs_to_sel_exec(bContext *C, wmOperator *op)
 {
   Scene *scene = CTX_data_scene(C);
+  const bool use_rotation = RNA_boolean_get(op->ptr, "use_rotation");
+  Object *ob = CTX_data_active_object(C);
+  const Base *base = CTX_data_active_base(C);
+  const bool is_pose = CTX_data_mode_enum(C) == CTX_MODE_POSE;
+  const bPoseChannel *pchan = is_pose ? CTX_data_active_pose_bone(C) : nullptr;
+  const bool active_selected = is_pose ? (pchan && (pchan->flag & POSE_SELECTED)) :
+                                        (CTX_data_mode_enum(C) == CTX_MODE_OBJECT && base &&
+                                         (base->flag & BASE_SELECTED));
+  if (use_rotation && (ob == nullptr || !active_selected)) {
+    BKE_report(op->reports,
+               RPT_ERROR,
+               "Select an active object or pose bone to copy world rotation");
+    return OPERATOR_CANCELLED;
+  }
+
   const int pivot_point = scene->toolsettings->transform_pivot_point;
-  if (snap_curs_to_sel_ex(C, pivot_point, scene->cursor.location)) {
+  if (snap_curs_to_sel_ex(C, pivot_point, scene->cursor.location, use_rotation && is_pose)) {
+    if (use_rotation) {
+      Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
+      const Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
+      float4x4 world = ob_eval->object_to_world();
+      if (is_pose) {
+        const bPoseChannel *pchan_eval = BKE_pose_channel_find_name(ob_eval->pose, pchan->name);
+        mul_m4_m4m4(world.ptr(), ob_eval->object_to_world().ptr(), pchan_eval->pose_mat);
+      }
+      math::Quaternion rotation;
+      mat4_to_quat(&rotation.w, world.ptr());
+      scene->cursor.set_rotation(rotation, false);
+    }
     WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
     DEG_id_tag_update(&scene->id, ID_RECALC_SYNC_TO_EVAL);
 
@@ -1034,7 +1533,13 @@ void VIEW3D_OT_snap_cursor_to_selected(wmOperatorType *ot)
   ot->poll = ED_operator_view3d_active;
 
   /* flags */
-  ot->flag = OPTYPE_REGISTER;
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+
+  RNA_def_boolean(ot->srna,
+                  "use_rotation",
+                  false,
+                  "World Rotation",
+                  "Also copy the evaluated world rotation of the active selected object or pose bone");
 }
 
 /** \} */

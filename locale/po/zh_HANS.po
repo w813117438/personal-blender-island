@@ -165512,3 +165512,24 @@ msgstr "均匀缩放每条曲线到特定长度"
 msgid "Distance from the ground plane"
 msgstr "距地平面距离"
 
+msgid "Selection to Cursor (World Location & Rotation)"
+msgstr "选中项 → 游标（世界位置和旋转）"
+
+msgid "Cursor to Selected (World Location & Rotation)"
+msgstr "游标 → 选中项（世界位置和旋转）"
+
+msgid "World Rotation"
+msgstr "世界旋转"
+
+msgid "Also copy the evaluated world rotation of the active selected object or pose bone"
+msgstr "同时复制活动选中物体或姿态骨骼求值后的世界旋转"
+
+msgid "Select an active object or pose bone to copy world rotation"
+msgstr "请选择活动物体或姿态骨骼以复制世界旋转"
+
+msgid "Cannot reach the requested world transform; original pose restored. Check connected bones, locks, or overriding constraints"
+msgstr "无法达到目标世界变换，已恢复原姿态。请检查相连骨骼、锁定或覆盖变换的约束"
+
+msgid "Cannot reach the requested world transform; original objects restored. Check locks or overriding constraints"
+msgstr "无法达到目标世界变换，已恢复物体原状态。请检查锁定或覆盖变换的约束"
+
