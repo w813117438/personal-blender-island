@@ -2,7 +2,9 @@
 
 个人开发分支使用 `personal`，推送代码会触发 `Personal Blender - Windows` 工作流。也可以在 GitHub 仓库的 Actions 页选择这个工作流并点击 Run workflow 手动构建。
 
-成功后在该次运行的 Artifacts 区下载 `blender-personal-windows-x64-运行编号`，解压后包含 MSI 安装包、ZIP 便携包和 SHA256 校验值。构建日志也会保留为独立附件。附件保留 7 天。
+在该次运行的 Artifacts 区下载 `blender-windows-portable-运行编号`（ZIP 便携包）或 `blender-windows-installer-运行编号`（MSI 安装包），每个包附带 SHA256 校验文件。ZIP 先打包并上传，所以之后 MSI 失败仍然能下载便携包。构建日志保留为独立附件，包含 CPack 和 WiX 的详细日志。附件保留 7 天。
+
+MSI 使用磁盘根目录下新建的短临时路径打包，避免 WiX 3 无法读取超过 Windows MAX_PATH 限制的 Python 资源路径。临时目录由 GitHub 一次性执行器在作业结束后回收。
 
 这是个人开发版，不是 Blender 官方发行版。安装包未做代码签名。源码来自 Blender，保留上游许可证及版权声明。
 

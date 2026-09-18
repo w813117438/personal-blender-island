@@ -39,43 +39,35 @@ jobs:
           & ./.local-build/build-full/bin/Release/blender.exe --background --factory-startup --python-exit-code 1 --python ./tests/python/view3d_cursor_world_snap.py 2>&1 | Tee-Object -FilePath .local-build/logs/world-snap-tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Package MSI and portable ZIP
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $build = Join-Path $env:GITHUB_WORKSPACE '.local-build/build-full'
-          $output = Join-Path $env:GITHUB_WORKSPACE '.local-build/packages'
-          New-Item -ItemType Directory -Force $output | Out-Null
-          $portable = Join-Path $env:GITHUB_WORKSPACE '.local-build/tools/cmake-3.31.8-windows-x86_64/bin/cpack.exe'
-          $cpack = if (Test-Path $portable) { $portable } else { (Get-Command cpack.exe -ErrorAction Stop).Source }
-          $wix = Get-ChildItem "${env:ProgramFiles(x86)}/WiX Toolset*/bin/candle.exe" | Select-Object -First 1
-          if (!$wix) { throw 'WiX 3 is required to create the MSI installer.' }
-          $env:PATH = $wix.DirectoryName + ';' + $env:PATH
-          Push-Location $build
-          try {
-            & $cpack -G WIX -C Release --config CPackConfig.cmake -B $output
-            if ($LASTEXITCODE -ne 0) { throw 'MSI packaging failed.' }
-          } finally { Pop-Location }
-          $zip = Join-Path $output "blender-personal-windows-x64-$($env:GITHUB_SHA.Substring(0,8)).zip"
-          & 7z a -tzip $zip "$build/bin/Release/*" -mx=3
-          if ($LASTEXITCODE -ne 0) { throw 'ZIP packaging failed.' }
-          $packages = @(Get-ChildItem $output -File | Where-Object Extension -in '.msi','.zip')
-          if (!($packages | Where-Object Extension -eq '.msi')) { throw 'MSI output is missing.' }
-          $packages | Get-FileHash -Algorithm SHA256 | ForEach-Object {
-            '{0}  {1}' -f $_.Hash, (Split-Path $_.Path -Leaf)
-          } | Set-Content (Join-Path $output 'SHA256SUMS.txt')
+      - name: Package portable ZIP
+        run: ./tools/local-build/Package-Blender.ps1 -Format ZIP
 
-      - name: Upload install packages
+      - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: blender-personal-windows-x64-${{ github.run_number }}
+          name: blender-windows-portable-${{ github.run_number }}
+          path: |
+            .local-build/packages/*.zip
+            .local-build/packages/*.zip.sha256
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Package MSI installer
+        run: ./tools/local-build/Package-Blender.ps1 -Format MSI
+
+      - name: Upload MSI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-windows-installer-${{ github.run_number }}
           path: |
             .local-build/packages/*.msi
-            .local-build/packages/*.zip
-            .local-build/packages/SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
+            .local-build/packages/*.msi.sha256
           include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
       - name: Upload diagnostics
         if: always()
@@ -84,6 +76,7 @@ jobs:
           name: windows-build-logs-${{ github.run_number }}
           include-hidden-files: true
           path: |
+            .local-build/packages/wix-diagnostics/*.log
             .local-build/logs/*.log
             .local-build/build-full/Build.log
             .local-build/build-full/CMakeFiles/CMakeConfigureLog.yaml
