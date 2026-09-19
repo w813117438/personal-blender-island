@@ -239,17 +239,14 @@ static short acf_generic_indentation_2(bAnimContext *ac, bAnimListElem *ale)
 /* indentation which varies with the grouping status */
 static short acf_generic_indentation_flexible(bAnimContext * /*ac*/, bAnimListElem *ale)
 {
-  if (ale->type != ANIMTYPE_FCURVE) {
+  if (!ELEM(ale->type, ANIMTYPE_FCURVE, ANIMTYPE_FCURVE_PROPERTY)) {
     return 0;
   }
 
   /* Grouped F-Curves need extra level of indentation. */
   const FCurve *fcu = static_cast<const FCurve *>(ale->data);
-  if (fcu->grp) {
-    return 1;
-  }
-
-  return 0;
+  /* Leaf rows have no disclosure triangle; leave room for the parent's triangle as well. */
+  return (fcu->grp ? 1 : 0) + (ale->property_axis ? 3 : 0);
 }
 
 /* basic offset for channels derived from indentation */
@@ -306,6 +303,7 @@ static short acf_generic_group_offset(bAnimContext *ac, bAnimListElem *ale)
        * to account for, so we can handle them very simply here in one place. */
       switch (ale->type) {
         case ANIMTYPE_FCURVE:
+        case ANIMTYPE_FCURVE_PROPERTY:
         case ANIMTYPE_GROUP: {
           offset += short(0.35f * U.widget_unit);
           break;
@@ -1020,6 +1018,19 @@ static void acf_fcurve_name(bAnimListElem *ale, char *name)
 
   FCurve *fcurve = static_cast<FCurve *>(ale->data);
 
+  if (ale->property_axis) {
+    const bool axis_angle = fcurve->rna_path().endswith("rotation_axis_angle");
+    if (axis_angle && fcurve->array_index == 0) {
+      BLI_strncpy(name, IFACE_("Angle"), ANIM_CHAN_NAME_SIZE);
+      return;
+    }
+    const bool four = fcurve->rna_path().endswith("rotation_quaternion") || axis_angle;
+    const char *axes = four ? "WXYZ" : "XYZ";
+    name[0] = axes[fcurve->array_index];
+    name[1] = '\0';
+    return;
+  }
+
   /* Clear the error flag. It'll be set again when an error situation is detected. */
   fcurve->flag &= ~FCURVE_DISABLED;
 
@@ -1176,6 +1187,47 @@ static bAnimChannelType ACF_FCURVE = {
     /*setting_flag*/ acf_fcurve_setting_flag,
     /*setting_ptr*/ acf_fcurve_setting_ptr,
     /*setting_post_update*/ nullptr,
+};
+
+static void acf_property_name(bAnimListElem *ale, char *name)
+{
+  const FCurve *fcu = static_cast<const FCurve *>(ale->data);
+  const char *property = strrchr(fcu->rna_path().c_str(), '.');
+  property = property ? property + 1 : fcu->rna_path().c_str();
+  const char *label = STREQ(property, "location") ? "Location" :
+                      STREQ(property, "scale") ? "Scale" : "Rotation";
+  BLI_strncpy(name, IFACE_(label), ANIM_CHAN_NAME_SIZE);
+}
+
+static bool acf_property_setting_valid(bAnimContext *, bAnimListElem *,
+                                       eAnimChannel_Settings setting)
+{
+  return ELEM(setting, ACHANNEL_SETTING_SELECT, ACHANNEL_SETTING_EXPAND);
+}
+
+static int acf_property_setting_flag(bAnimContext *, eAnimChannel_Settings setting, bool *r_neg)
+{
+  *r_neg = false;
+  return setting == ACHANNEL_SETTING_EXPAND ? FCURVE_PROPERTY_EXPANDED : FCURVE_SELECTED;
+}
+
+static void acf_property_setting_update(Main &, const bAnimListElem &ale,
+                                         eAnimChannel_Settings setting)
+{
+  const int mask = setting == ACHANNEL_SETTING_EXPAND ? FCURVE_PROPERTY_EXPANDED : FCURVE_SELECTED;
+  const int value = static_cast<FCurve *>(ale.data)->flag & mask;
+  for (int i = 0; i < ale.property_curve_count; i++) {
+    ale.property_curves[i]->flag = eFCurve_Flags((ale.property_curves[i]->flag & ~mask) | value);
+  }
+}
+
+static bAnimChannelType ACF_FCURVE_PROPERTY = {
+    "Transform Property", ACHANNEL_ROLE_EXPANDER,
+    acf_generic_channel_color, acf_fcurve_channel_color, acf_generic_channel_backdrop,
+    acf_generic_indentation_flexible, acf_generic_group_offset,
+    acf_property_name, nullptr, nullptr,
+    acf_property_setting_valid, acf_property_setting_flag, acf_fcurve_setting_ptr,
+    acf_property_setting_update,
 };
 
 /* NLA Control FCurves Expander ----------------------- */
@@ -4712,6 +4764,7 @@ static void ANIM_init_channel_typeinfo_data()
     animchannelTypeInfo[type++] = &ACF_OBJECT; /* Object */
     animchannelTypeInfo[type++] = &ACF_GROUP;  /* Group */
     animchannelTypeInfo[type++] = &ACF_FCURVE; /* F-Curve */
+    animchannelTypeInfo[type++] = &ACF_FCURVE_PROPERTY;
 
     animchannelTypeInfo[type++] = &ACF_NLACONTROLS; /* NLA Control FCurve Expander */
     animchannelTypeInfo[type++] = &ACF_NLACURVE;    /* NLA Control FCurve Channel */
@@ -4899,7 +4952,7 @@ bAction *ANIM_channel_action_get(const bAnimListElem *ale)
     return static_cast<bAction *>(ale->key_data);
   }
 
-  if (ELEM(ale->type, ANIMTYPE_GROUP, ANIMTYPE_FCURVE)) {
+  if (ELEM(ale->type, ANIMTYPE_GROUP, ANIMTYPE_FCURVE, ANIMTYPE_FCURVE_PROPERTY)) {
     ID *owner = ale->fcurve_owner_id;
 
     if (owner && GS(owner->name) == ID_AC) {

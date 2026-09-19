@@ -42,6 +42,7 @@
 #include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
+#include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -1740,6 +1741,51 @@ static wmOperatorStatus rotation_mode_convert_exec(bContext *C, wmOperator *op)
   Main *bmain = CTX_data_main(C);
 
   Vector<ed::AnimTransformable> selected_transformables = selected_transformables_from_context(C);
+  PointerRNA rotation_target = CTX_data_pointer_get(C, "rotation_mode_target");
+  if (rotation_target.type == RNA_Object && rotation_target.data) {
+    selected_transformables.clear();
+    selected_transformables.append(ed::AnimTransformable(*static_cast<Object *>(rotation_target.data)));
+  }
+  else if (rotation_target.type == RNA_PoseBone && rotation_target.data) {
+    selected_transformables.clear();
+    selected_transformables.append(ed::AnimTransformable(
+        *reinterpret_cast<Object *>(rotation_target.owner_id),
+        *static_cast<bPoseChannel *>(rotation_target.data)));
+  }
+  /* Validate the entire operation before replacing any curves. Procedural/infinite animation
+   * cannot be represented faithfully by a finite set of keys in a different parameterization. */
+  for (const ed::AnimTransformable &transformable : selected_transformables) {
+    const auto rotation_path = [&](const StringRefNull path) {
+      return path == transformable.rna_path_to_rotation(ROT_MODE_EUL) ||
+             path == transformable.rna_path_to_rotation(ROT_MODE_QUAT) ||
+             path == transformable.rna_path_to_rotation(ROT_MODE_AXISANGLE) ||
+             path == transformable.rna_path_to_rotation_mode();
+    };
+    bool unsupported = false;
+    if (const AnimData *adt = BKE_animdata_from_id(transformable.owner_id())) {
+      for (const FCurve &curve : adt->drivers) {
+        unsupported |= rotation_path(curve.rna_path());
+      }
+    }
+    animrig::foreach_action_slot_use(*transformable.owner_id(),
+        [&](animrig::Action &action, const animrig::slot_handle_t slot) {
+          animrig::foreach_fcurve_in_action_slot(action, slot, [&](FCurve &curve) {
+            if (rotation_path(curve.rna_path())) {
+              unsupported |= !BKE_id_is_editable(bmain, &action.id) ||
+                             !curve.modifiers.is_empty() || curve.fpt != nullptr ||
+                             curve.extend != FCURVE_EXTRAPOLATE_CONSTANT ||
+                             curve.rna_path() == transformable.rna_path_to_rotation_mode();
+            }
+          });
+          return true;
+        });
+    if (unsupported) {
+      BKE_report(op->reports, RPT_ERROR,
+          "Smart rotation conversion requires editable keyframes without drivers, modifiers, "
+          "linear extrapolation or animated rotation mode; animation was not changed");
+      return OPERATOR_CANCELLED;
+    }
+  }
   for (ed::AnimTransformable &transformable : selected_transformables) {
     /* We cannot skip transformables based on their current rotation mode since that may be
      * animated. So `transformable.get_rotation_mode() == mode -> continue` won't work.*/

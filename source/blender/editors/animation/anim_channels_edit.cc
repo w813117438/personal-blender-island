@@ -4521,7 +4521,7 @@ static int mouse_anim_channels(bContext *C,
   /* selectmode -1 is a special case for ActionGroups only,
    * which selects all of the channels underneath it only. */
   /* TODO: should this feature be extended to work with other channel types too? */
-  if ((selectmode == -1) && (ale->type != ANIMTYPE_GROUP)) {
+  if ((selectmode == -1) && !ELEM(ale->type, ANIMTYPE_GROUP, ANIMTYPE_FCURVE_PROPERTY)) {
     /* normal channels should not behave normally in this case */
     ANIM_animdata_freelist(&anim_data);
     return 0;
@@ -4569,6 +4569,18 @@ static int mouse_anim_channels(bContext *C,
     case ANIMTYPE_DSLIGHTPROBE:
       notifierFlags |= click_select_channel_dummy(ac, ale, selectmode);
       break;
+    case ANIMTYPE_FCURVE_PROPERTY: {
+      const bool selected = ANIM_channel_setting_get(ac, ale, ACHANNEL_SETTING_SELECT) > 0;
+      if (selectmode == SELECT_REPLACE) {
+        ANIM_anim_channels_select_set(ac, ACHANNEL_SETFLAG_CLEAR);
+      }
+      const bool select = selectmode != SELECT_SUBTRACT &&
+                          !(selectmode == SELECT_INVERT && selected);
+      ANIM_channel_setting_set(ac, ale, ACHANNEL_SETTING_SELECT,
+                               select ? ACHANNEL_SETFLAG_ADD : ACHANNEL_SETFLAG_CLEAR);
+      notifierFlags |= ND_ANIMCHAN | NA_SELECTED;
+      break;
+    }
     case ANIMTYPE_GROUP:
       notifierFlags |= click_select_channel_group(ac, ale, selectmode, filter);
       break;

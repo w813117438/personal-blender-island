@@ -2021,6 +2021,13 @@ bool initTransform(bContext *C, TransInfo *t, wmOperator *op, const wmEvent *eve
   mode = transform_mode_really_used(C, eTfmMode(mode));
 
   t->context = C;
+  t->gizmo_mouse_sensitivity = 1.0f;
+  if ((prop = RNA_struct_find_property(op->ptr, "use_gizmo_sensitivity")) &&
+      RNA_property_boolean_get(op->ptr, prop)) {
+    t->gizmo_mouse_sensitivity = U.transform_gizmo_speed > 0.0f ?
+                                   clamp_f(U.transform_gizmo_speed, 0.1f, 1.0f) : 1.0f;
+  }
+
 
   /* Added initialize, for external calls to set stuff in TransInfo, like undo string. */
 

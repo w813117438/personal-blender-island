@@ -1320,6 +1320,10 @@ struct UserDef {
 
   UserDef_Experimental experimental;
 
+  /** Personal transform gizmo display and mouse response multipliers. */
+  float transform_gizmo_size = 1.0f;
+  float transform_gizmo_speed = 1.0f;
+
   /** Runtime data (keep last). */
   UserDef_Runtime runtime;
 };

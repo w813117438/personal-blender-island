@@ -133,6 +133,7 @@ enum eBConstraint_Types : short {
   CONSTRAINT_TYPE_TRANSFORM_CACHE = 29,
   CONSTRAINT_TYPE_ARMATURE = 30,
   CONSTRAINT_TYPE_GEOMETRY_ATTRIBUTE = 31,
+  CONSTRAINT_TYPE_SMART = 32,
 
   /* This should be the last entry in this list. */
   NUM_CONSTRAINT_TYPES,
@@ -992,6 +993,34 @@ struct bClampToConstraint {
 };
 
 /* Child Of Constraint */
+/** Persistent binding snapshots, addressed by an animated integer channel. */
+struct bSmartConstraintBinding {
+  bSmartConstraintBinding *next, *prev;
+  float offset[4][4];
+  float target_inverse[4][4];
+  float frame;
+  float influence;
+};
+
+struct bSmartConstraint {
+  struct Object *tar;
+  char subtarget[64];
+  ListBaseT<bSmartConstraintBinding> bindings;
+  int binding_index;
+  int flag;
+  float previous_influence;
+  char _pad[4];
+  /** Evaluation-only cache, never used to determine playback history. */
+  float input_matrix[4][4];
+  float output_matrix[4][4];
+  float target_matrix[4][4];
+};
+
+enum {
+  SMART_CONSTRAINT_SWITCH_PENDING = 1 << 0,
+  SMART_CONSTRAINT_CACHE_VALID = 1 << 1,
+};
+
 struct bChildOfConstraint {
   /** Object which will act as parent (or target comes from). */
   struct Object *tar = nullptr;

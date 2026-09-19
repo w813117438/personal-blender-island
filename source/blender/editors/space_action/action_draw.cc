@@ -401,6 +401,9 @@ static void draw_keyframes(bAnimContext *ac,
                                     scale_factor,
                                     action_flag);
         break;
+      case ALE_FCURVE_PROPERTY:
+        ED_add_fcurve_property_channel(draw_list, ale, ycenter, scale_factor, action_flag);
+        break;
       case ALE_FCURVE: {
         ED_add_fcurve_channel(draw_list,
                               ale,

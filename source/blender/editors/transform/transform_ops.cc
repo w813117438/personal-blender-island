@@ -816,6 +816,10 @@ void properties_register(wmOperatorType *ot, int flags)
     RNA_def_property_flag(prop, PROP_HIDDEN | PROP_SKIP_SAVE);
   }
 
+  prop = RNA_def_boolean(ot->srna, "use_gizmo_sensitivity", false,
+                        "Gizmo Sensitivity", "Apply transform handle mouse sensitivity");
+  RNA_def_property_flag(prop, PROP_HIDDEN | PROP_SKIP_SAVE);
+
   if ((flags & P_NO_DEFAULTS) == 0) {
     prop = RNA_def_boolean(ot->srna,
                            "release_confirm",

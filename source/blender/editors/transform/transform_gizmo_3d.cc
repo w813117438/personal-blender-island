@@ -1861,6 +1861,7 @@ static void gizmogroup_init_properties_from_twtype(wmGizmoGroup *gzgroup)
       }
 
       RNA_boolean_set(ptr, "release_confirm", true);
+      RNA_boolean_set(ptr, "use_gizmo_sensitivity", true);
     }
   }
   MAN_ITER_AXES_END;

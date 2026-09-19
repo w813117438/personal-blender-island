@@ -3391,6 +3391,15 @@ static eHandlerActionFlag wm_handlers_do_gizmo_handler(bContext *C,
     wm_gizmomap_highlight_handled(gzmap);
   }
 
+  if (gz && prev.gz_modal == nullptr && event->type == RIGHTMOUSE &&
+      event->val == KM_PRESS && event->modifier == 0 &&
+      STR_ELEM(gz->parent_gzgroup->type->idname,
+               "VIEW3D_GGT_xform_gizmo", "VIEW3D_GGT_xform_gizmo_context"))
+  {
+    WM_menu_name_call(C, "VIEW3D_MT_transform_handle_settings", wm::OpCallContext::InvokeDefault);
+    return WM_HANDLER_BREAK;
+  }
+
   /* Don't use from now on. */
   bool is_event_handle_all = gz && (gz->flag & WM_GIZMO_EVENT_HANDLE_ALL);
 

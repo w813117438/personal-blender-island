@@ -1172,6 +1172,120 @@ static bConstraintTypeInfo CTI_CHILDOF = {
     /*evaluate_constraint*/ childof_evaluate,
 };
 
+/* -------- Smart Constraint ------- */
+
+static void smart_free_data(bConstraint *con)
+{
+  auto *data = static_cast<bSmartConstraint *>(con->data);
+  BLI_freelistN(&data->bindings);
+}
+
+static void smart_copy_data(bConstraint *con, bConstraint *source)
+{
+  auto *data = static_cast<bSmartConstraint *>(con->data);
+  const auto *src = static_cast<bSmartConstraint *>(source->data);
+  BLI_duplicatelist(&data->bindings, &src->bindings);
+  data->flag &= ~SMART_CONSTRAINT_CACHE_VALID;
+}
+
+static void smart_id_looper(bConstraint *con, ConstraintIDFunc func, void *userdata)
+{
+  auto *data = static_cast<bSmartConstraint *>(con->data);
+  func(con, reinterpret_cast<ID **>(&data->tar), false, userdata);
+}
+
+static int smart_get_tars(bConstraint *con, ListBaseT<bConstraintTarget> *list)
+{
+  auto *data = static_cast<bSmartConstraint *>(con->data);
+  bConstraintTarget *ct;
+  SINGLETARGET_GET_TARS(con, data->tar, data->subtarget, ct, list);
+  return 1;
+}
+
+static void smart_flush_tars(bConstraint *con, ListBaseT<bConstraintTarget> *list, bool no_copy)
+{
+  auto *data = static_cast<bSmartConstraint *>(con->data);
+  bConstraintTarget *ct = list->first();
+  SINGLETARGET_FLUSH_TARS(con, data->tar, data->subtarget, ct, list, no_copy);
+}
+
+static void smart_evaluate(bConstraint *con,
+                           bConstraintOb *cob,
+                           ListBaseT<bConstraintTarget> *targets)
+{
+  auto *data = static_cast<bSmartConstraint *>(con->data);
+  const bConstraintTarget *ct = targets->first();
+  data->flag &= ~SMART_CONSTRAINT_CACHE_VALID;
+  if (!VALID_CONS_TARGET(ct)) {
+    return;
+  }
+  copy_m4_m4(data->input_matrix, cob->matrix);
+  copy_m4_m4(data->target_matrix, ct->matrix);
+
+  if (data->bindings.is_empty()) {
+    float inverse[4][4];
+    if (!invert_m4_m4(inverse, ct->matrix)) {
+      return;
+    }
+    auto *binding = MEM_new<bSmartConstraintBinding>(__func__);
+    unit_m4(binding->offset);
+    copy_m4_m4(binding->target_inverse, inverse);
+    binding->frame = DEG_get_ctime(cob->depsgraph);
+    binding->influence = con->enforce;
+    BLI_addtail(&data->bindings, binding);
+    data->binding_index = 0;
+    /* Only initialization writes back. Ordinary playback is entirely stateless. */
+    if (bConstraint *original = constraint_find_original_for_update(cob, con)) {
+      auto *orig_data = static_cast<bSmartConstraint *>(original->data);
+      if (orig_data != data && orig_data->bindings.is_empty()) {
+        BLI_duplicatelist(&orig_data->bindings, &data->bindings);
+        orig_data->binding_index = 0;
+      }
+    }
+  }
+
+  const auto *binding = static_cast<const bSmartConstraintBinding *>(
+      BLI_findlink(&data->bindings, data->binding_index));
+  if (!binding) {
+    return;
+  }
+  float base[4][4], delta[4][4];
+  mul_m4_m4m4(base, binding->offset, cob->matrix);
+  mul_m4_m4m4(delta, ct->matrix, binding->target_inverse);
+  /* The zero-weight solution still includes the captured release offset. */
+  if (con->enforce == 0.0f) {
+    copy_m4_m4(cob->matrix, base);
+  }
+  else if (con->enforce == 1.0f) {
+    mul_m4_m4m4(cob->matrix, delta, base);
+  }
+  else {
+    /* Blend target motion rather than decomposing the owner's transform. This retains shear
+     * introduced by non-uniformly scaled parents even at partial influence. */
+    float identity[4][4], blended[4][4];
+    unit_m4(identity);
+    interp_m4_m4m4(blended, identity, delta, con->enforce);
+    mul_m4_m4m4(cob->matrix, blended, base);
+  }
+  copy_m4_m4(data->output_matrix, cob->matrix);
+  data->flag |= SMART_CONSTRAINT_CACHE_VALID;
+}
+
+static bConstraintTypeInfo CTI_SMART = {
+    /*type*/ CONSTRAINT_TYPE_SMART,
+    /*size*/ sizeof(bSmartConstraint),
+    /*name*/ N_("Smart Constraint"),
+    /*struct_name*/ "bSmartConstraint",
+    /*free_data*/ smart_free_data,
+    /*id_looper*/ smart_id_looper,
+    /*copy_data*/ smart_copy_data,
+    /*new_data*/ nullptr,
+    /*get_constraint_targets*/ smart_get_tars,
+    /*flush_constraint_targets*/ smart_flush_tars,
+    /*get_target_matrix*/ default_get_tarmat,
+    /*evaluate_constraint*/ smart_evaluate,
+};
+
 /* -------- TrackTo Constraint ------- */
 
 static void trackto_new_data(void *cdata)
@@ -5862,6 +5976,7 @@ static void constraints_init_typeinfo()
   constraintsTypeInfo[29] = &CTI_TRANSFORM_CACHE; /* Transform Cache Constraint */
   constraintsTypeInfo[30] = &CTI_ARMATURE;        /* Armature Constraint */
   constraintsTypeInfo[31] = &CTI_ATTRIBUTE;       /* Attribute Transform Constraint */
+  constraintsTypeInfo[32] = &CTI_SMART;
 }
 
 const bConstraintTypeInfo *BKE_constraint_typeinfo_from_type(int type)
@@ -6433,7 +6548,7 @@ bool BKE_constraint_has_influence(const bConstraint *con)
   if (con->flag & CONSTRAINT_OFF) {
     return false;
   }
-  if (con->enforce == 0.0f) {
+  if (con->enforce == 0.0f && con->type != CONSTRAINT_TYPE_SMART) {
     return false;
   }
   if (con->flag & CONSTRAINT_DISABLE) {
@@ -6790,7 +6905,7 @@ void BKE_constraints_solve(Depsgraph *depsgraph,
     /* influence of constraint
      * - value should have been set from animation data already
      */
-    enf = con.enforce;
+    enf = con.type == CONSTRAINT_TYPE_SMART ? 1.0f : con.enforce;
 
     /* Initialize the custom space for use in calculating the matrices. */
     BKE_constraint_custom_object_space_init(cob, &con);
@@ -6849,6 +6964,13 @@ void BKE_constraint_blend_write(BlendWriter *writer, ListBaseT<bConstraint> *con
 
       /* do any constraint specific stuff */
       switch (con.type) {
+        case CONSTRAINT_TYPE_SMART: {
+          auto *data = static_cast<bSmartConstraint *>(con.data);
+          for (bSmartConstraintBinding &binding : data->bindings) {
+            writer->write_struct(&binding);
+          }
+          break;
+        }
         case CONSTRAINT_TYPE_ARMATURE: {
           bArmatureConstraint *data = static_cast<bArmatureConstraint *>(con.data);
 
@@ -6911,6 +7033,12 @@ void BKE_constraint_blend_read_data(BlendDataReader *reader,
     }
 
     switch (con.type) {
+      case CONSTRAINT_TYPE_SMART: {
+        auto *data = static_cast<bSmartConstraint *>(con.data);
+        BLO_read_struct_list(reader, bSmartConstraintBinding, &data->bindings);
+        data->flag = 0;
+        break;
+      }
       case CONSTRAINT_TYPE_ARMATURE: {
         bArmatureConstraint *data = static_cast<bArmatureConstraint *>(con.data);
 

@@ -90,8 +90,9 @@ class BONE_PT_transform(BoneButtonsPanel, Panel):
                 row.prop(pchan, "lock_rotation", text="", emboss=False, icon='DECORATE_UNLOCKED')
 
             row = layout.row(align=True)
-            row.prop(pchan, "rotation_mode", text="Mode")
-            row.operator_menu_enum("anim.rotation_mode_convert", "mode", icon='DOWNARROW_HLT', text="")
+            row.context_pointer_set("rotation_mode_target", pchan)
+            row.operator_menu_enum("anim.rotation_mode_convert", "mode",
+                                   text=pchan.bl_rna.properties["rotation_mode"].enum_items[pchan.rotation_mode].name)
 
             col = layout.column()
             row = col.row(align=True)

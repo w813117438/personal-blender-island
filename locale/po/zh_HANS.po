@@ -165533,3 +165533,36 @@ msgstr "无法达到目标世界变换，已恢复原姿态。请检查相连骨
 msgid "Cannot reach the requested world transform; original objects restored. Check locks or overriding constraints"
 msgstr "无法达到目标世界变换，已恢复物体原状态。请检查锁定或覆盖变换的约束"
 
+msgid "Handle Size"
+msgstr "控制柄大小倍率"
+
+msgid "Handle Speed"
+msgstr "控制柄速度倍率"
+
+msgid "Transform Handle Settings"
+msgstr "变换控制柄设置"
+
+msgid "Display size and hit area of transform handles; 1 is the original size"
+msgstr "变换控制柄的显示尺寸与点击范围；1 为原始大小"
+
+msgid "Mouse sensitivity for move, rotate and scale handles; 1 is the original speed"
+msgstr "移动、旋转和缩放控制柄的拖动灵敏度；1 为原始速度"
+
+msgid "Smart rotation conversion requires editable keyframes without drivers, modifiers, linear extrapolation or animated rotation mode; animation was not changed"
+msgstr "智能旋转转换需要可编辑的关键帧，且不能包含旋转驱动器、曲线修改器、线性外推或旋转模式动画；原动画未修改"
+
+msgid "Smart Constraint"
+msgstr "智能约束"
+
+msgid "Smart Binding"
+msgstr "智能约束切换状态"
+
+msgid "Follow a target with recorded, jump-free influence switches"
+msgstr "跟随目标，并记录保持世界变换的权重切换"
+
+msgid "Record relative transforms when influence changes"
+msgstr "在权重改变时记录当前相对变换"
+
+msgid "Recorded relative transform for this switch"
+msgstr "本次切换所记录的相对变换；调整切换时间时与权重关键帧一起移动"
+

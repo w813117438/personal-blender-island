@@ -126,6 +126,16 @@ class ConstraintButtonsPanel:
 
     # Drawing methods for specific constraints. (Shared by object and bone constraint panels)
 
+    def draw_smart(self, context):
+        layout = self.layout
+        con = self.get_constraint(context)
+        layout.use_property_split = True
+        self.target_template(layout, con)
+        layout.prop(con, "influence")
+        row = layout.row()
+        row.enabled = False
+        row.prop(con, "binding_index")
+
     def draw_childof(self, context):
         layout = self.layout
         con = self.get_constraint(context)
@@ -1704,10 +1714,22 @@ class BONE_PT_bGeometryAttributeConstraint(BoneConstraintPanel, ConstraintButton
         self.draw_geometry_attribute(context)
 
 
+class OBJECT_PT_bSmartConstraint(ObjectConstraintPanel, ConstraintButtonsPanel, Panel):
+    def draw(self, context):
+        self.draw_smart(context)
+
+
+class BONE_PT_bSmartConstraint(BoneConstraintPanel, ConstraintButtonsPanel, Panel):
+    def draw(self, context):
+        self.draw_smart(context)
+
+
 classes = (
     # Object Panels
     OBJECT_PT_constraints,
     BONE_PT_constraints,
+    OBJECT_PT_bSmartConstraint,
+    BONE_PT_bSmartConstraint,
     OBJECT_PT_bChildOfConstraint,
     OBJECT_PT_bTrackToConstraint,
     OBJECT_PT_bKinematicConstraint,

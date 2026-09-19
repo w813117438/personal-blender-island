@@ -219,6 +219,21 @@ add_blender_test_allow_error(
   --python ${CMAKE_CURRENT_LIST_DIR}/view3d_cursor_world_snap.py
 )
 
+add_blender_test_allow_error(
+  smart_rotation_conversion
+  --python ${CMAKE_CURRENT_LIST_DIR}/smart_rotation_conversion.py
+)
+
+add_blender_test_allow_error(
+  graph_selected_channels
+  --python ${CMAKE_CURRENT_LIST_DIR}/graph_selected_channels.py
+)
+
+add_blender_test_allow_error(
+  smart_constraint
+  --python ${CMAKE_CURRENT_LIST_DIR}/smart_constraint.py
+)
+
 add_blender_test(
   script_load_keymap
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_keymap_completeness.py

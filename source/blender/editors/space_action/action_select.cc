@@ -145,6 +145,7 @@ static void actkeys_list_element_to_keylist(bAnimContext *ac,
         fcurve_to_keylist(ale->adt, fcu, keylist, 0, range, ANIM_nla_mapping_allowed(ale));
         break;
       }
+      case ALE_FCURVE_PROPERTY:
       case ALE_NONE:
       case ALE_GPFRAME:
       case ALE_MASKLAY:
@@ -155,6 +156,12 @@ static void actkeys_list_element_to_keylist(bAnimContext *ac,
       case ALE_GREASE_PENCIL_DATA:
       case ALE_GREASE_PENCIL_GROUP:
         break;
+    }
+  }
+  else if (ale->type == ANIMTYPE_FCURVE_PROPERTY) {
+    for (int i = 0; i < ale->property_curve_count; i++) {
+      fcurve_to_keylist(ale->adt, ale->property_curves[i], keylist, 0, range,
+                        ANIM_nla_mapping_allowed(ale));
     }
   }
   else if (ale->type == ANIMTYPE_SUMMARY) {
@@ -1957,7 +1964,10 @@ static wmOperatorStatus mouse_action_keys(bAnimContext *ac,
 
         /* Highlight Action-Group or F-Curve? */
         if (ale != nullptr && ale->data) {
-          if (ale->type == ANIMTYPE_GROUP) {
+          if (ale->type == ANIMTYPE_FCURVE_PROPERTY) {
+            ANIM_channel_setting_set(ac, ale, ACHANNEL_SETTING_SELECT, ACHANNEL_SETFLAG_ADD);
+          }
+          else if (ale->type == ANIMTYPE_GROUP) {
             bActionGroup *agrp = static_cast<bActionGroup *>(ale->data);
 
             agrp->flag |= AGRP_SELECTED;

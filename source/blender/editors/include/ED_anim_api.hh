@@ -207,6 +207,7 @@ enum eAnim_ChannelType {
   ANIMTYPE_OBJECT,
   ANIMTYPE_GROUP,
   ANIMTYPE_FCURVE,
+  ANIMTYPE_FCURVE_PROPERTY,
 
   ANIMTYPE_NLACONTROLS,
   ANIMTYPE_NLACURVE,
@@ -263,6 +264,7 @@ enum eAnim_ChannelType {
 enum eAnim_KeyType {
   ALE_NONE = 0, /* no keyframe data */
   ALE_FCURVE,   /* F-Curve */
+  ALE_FCURVE_PROPERTY, /* Dope Sheet transform-property summary. */
   ALE_GPFRAME,  /* Grease Pencil Frames (Legacy) */
   ALE_MASKLAY,  /* Mask */
   ALE_NLASTRIP, /* NLA Strips */
@@ -305,6 +307,10 @@ ENUM_OPERATORS(eAnim_Update_Flags);
  */
 struct bAnimListElem {
   bAnimListElem *next, *prev;
+  /** Transient, non-owning transform channels. Never changes action grouping or F-Curve order. */
+  FCurve *property_curves[4];
+  int property_curve_count;
+  bool property_axis;
 
   /** source data this elem represents */
   void *data;

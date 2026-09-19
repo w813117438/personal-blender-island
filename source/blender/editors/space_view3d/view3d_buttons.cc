@@ -2146,8 +2146,11 @@ static void v3d_transform_butsR(const bContext *C, ui::Layout &layout, PointerRN
   }
 
   ui::Layout &row = layout.row(/*align=*/true);
-  row.prop(ptr, "rotation_mode", UI_ITEM_NONE, "", ICON_NONE);
-  row.op_menu_enum(C, "ANIM_OT_rotation_mode_convert", "mode", "", ICON_DOWNARROW_HLT);
+  row.context_ptr_set("rotation_mode_target", ptr);
+  const char *rotation_mode_name = "Rotation Mode";
+  RNA_property_enum_name(nullptr, ptr, RNA_struct_find_property(ptr, "rotation_mode"),
+                         RNA_enum_get(ptr, "rotation_mode"), &rotation_mode_name);
+  row.op_menu_enum(C, "ANIM_OT_rotation_mode_convert", "mode", rotation_mode_name, ICON_NONE);
 
   split = &layout.split(0.8f, false);
   colsub = &split->column(true);

@@ -6,6 +6,9 @@
  * \ingroup edanimation
  */
 
+#include <algorithm>
+#include <cmath>
+
 #include "DNA_action_types.h"
 #include "DNA_anim_types.h"
 #include "DNA_object_types.h"
@@ -248,54 +251,167 @@ static void convert_rotation_mode_range(const Span<const FCurve *> evaluation_bu
                                         const ed::AnimTransformable &transformable,
                                         const bool ensure_range_start_key)
 {
-  /* Filling the array with the current values to have good base values in case not every array
-   * index is keyed. */
-  ed::Rotation rotation_values = transformable.get_rotation_for_mode(from_mode);
-
-  KeyframeIterator key_iterator = KeyframeIterator(evaluation_buffer, range);
-  /* Generate the current rotation values respecting missing FCurves. */
-  for (const FCurve *fcurve : evaluation_buffer) {
-    if (!fcurve) {
-      continue;
-    }
-    rotation_values.values[fcurve->array_index] = evaluate_fcurve(fcurve, range.min);
+  /* Sample for error measurement, but only store keys needed to reproduce the motion.
+   * Original key times are mandatory boundaries, including fractional/negative frames. */
+  Vector<float> frames;
+  Vector<animrig::KeyframeSettings> key_settings;
+  KeyframeIterator iterator(evaluation_buffer, range);
+  if (ensure_range_start_key && (!iterator.can_advance() || iterator.get_frame() > range.min)) {
+    frames.append(range.min);
+    key_settings.append(iterator.get_keyframe_settings());
+  }
+  while (iterator.can_advance()) {
+    frames.append(iterator.get_frame());
+    key_settings.append(iterator.get_keyframe_settings());
+    iterator.advance();
+  }
+  if (frames.is_empty()) {
+    return;
   }
 
-  /* Storing the previous rotation for euler angles larger than 180 degrees. */
-  ed::Rotation previous_conversion = rotation_values.converted_to_mode(to_mode);
-  const animrig::KeyframeSettings settings = key_iterator.get_keyframe_settings();
-
-  if (ensure_range_start_key && key_iterator.get_frame() > range.min) {
-    /* This case can happen if the rotation mode is keyed, but not any of the rotation channels.
-     * In that case the below loop would not insert a key into the range start which would result
-     * in a visual jump after the conversion. */
+  auto evaluate_rotation = [&](const float frame) {
+    ed::Rotation rotation = transformable.get_rotation_for_mode(from_mode);
+    for (const FCurve *curve : evaluation_buffer) {
+      if (curve) {
+        rotation.values[curve->array_index] = evaluate_fcurve(curve, frame);
+      }
+    }
+    return rotation;
+  };
+  auto compatible = [&](const ed::Rotation &source, const ed::Rotation *previous) {
+    ed::Rotation converted = source.converted_to_mode(to_mode,
+        to_mode > ROT_MODE_QUAT ? previous : nullptr);
+    if (previous && to_mode == ROT_MODE_QUAT &&
+        dot_v4v4(converted.values.data(), previous->values.data()) < 0.0f) {
+      negate_v4(converted.values.data());
+    }
+    if (previous && to_mode == ROT_MODE_AXISANGLE) {
+      if (fabsf(sinf(converted.values[0] * 0.5f)) < 1e-6f) {
+        copy_v3_v3(&converted.values[1], &previous->values[1]);
+      }
+      else if (dot_v3v3(&converted.values[1], &previous->values[1]) < 0.0f) {
+        negate_v3(&converted.values[1]);
+        converted.values[0] = -converted.values[0];
+      }
+      converted.values[0] += float(2.0 * M_PI) *
+          roundf((previous->values[0] - converted.values[0]) / float(2.0 * M_PI));
+    }
+    return converted;
+  };
+  auto error = [](const ed::Rotation &a, const ed::Rotation &b) {
+    ed::Rotation qa = a.converted_to_mode(ROT_MODE_QUAT);
+    ed::Rotation qb = b.converted_to_mode(ROT_MODE_QUAT);
+    normalize_qt(qa.values.data());
+    normalize_qt(qb.values.data());
+    const double sign = dot_v4v4(qa.values.data(), qb.values.data()) < 0.0f ? -1.0 : 1.0;
+    double difference = 0.0, sum = 0.0;
+    for (int i = 0; i < 4; i++) {
+      const double d = qa.values[i] - sign * qb.values[i];
+      const double p = qa.values[i] + sign * qb.values[i];
+      difference += d * d;
+      sum += p * p;
+    }
+    return 4.0 * atan2(sqrt(difference), sqrt(sum));
+  };
+  auto insert = [&](const float frame, const ed::Rotation &rotation,
+                    animrig::KeyframeSettings settings) {
+    settings.interpolation = BEZT_IPO_LIN;
+    settings.handle = HD_AUTO_ANIM;
     for (const int i : insertion_buffer.index_range()) {
-      FCurve *fcurve = insertion_buffer[i];
-      BLI_assert_msg(fcurve, "For insertion all FCurves are expected to be created before");
-      insert_vert_fcurve(
-          fcurve, {range.min, previous_conversion.values[i]}, settings, INSERTKEY_FAST);
+      insert_vert_fcurve(insertion_buffer[i], {frame, rotation.values[i]}, settings, INSERTKEY_FAST);
     }
-  }
+  };
 
-  while (key_iterator.can_advance()) {
-    const float frame = key_iterator.get_frame();
-    const animrig::KeyframeSettings settings = key_iterator.get_keyframe_settings();
-    key_iterator.advance();
-    /* Generate the current rotation values respecting missing FCurves. */
-    for (const FCurve *fcurve : evaluation_buffer) {
-      if (!fcurve) {
+  ed::Rotation previous = compatible(evaluate_rotation(frames[0]), nullptr);
+  if (to_mode == ROT_MODE_AXISANGLE && frames.size() > 1 &&
+      fabsf(sinf(previous.values[0] * 0.5f)) < 1e-6f) {
+    const ed::Rotation next = compatible(
+        evaluate_rotation(std::min(float(floor(double(frames[0])) + 1.0), frames[1])), nullptr);
+    copy_v3_v3(&previous.values[1], &next.values[1]);
+  }
+  insert(frames[0], previous, key_settings[0]);
+  constexpr double tolerance = 0.05 * M_PI / 180.0;
+  for (int interval = 0; interval + 1 < frames.size(); interval++) {
+    const float first = frames[interval], last = frames[interval + 1];
+    /* Original key times remain mandatory. Every additional candidate is an integer
+     * timeline frame, including when the original keys are negative or fractional. */
+    Vector<float> times;
+    Vector<ed::Rotation> samples;
+    times.append(first);
+    samples.append(previous);
+    for (double frame = floor(double(first)) + 1.0; frame < double(last); frame += 1.0) {
+      const float time = float(frame);
+      if (time <= times.last() || time >= last) {
         continue;
       }
-      rotation_values.values[fcurve->array_index] = evaluate_fcurve(fcurve, frame);
+      times.append(time);
+      samples.append(compatible(evaluate_rotation(time), &samples.last()));
     }
-    ed::Rotation converted_rotation = rotation_values.converted_to_mode(to_mode,
-                                                                        &previous_conversion);
-    for (const int i : insertion_buffer.index_range()) {
-      FCurve *fcurve = insertion_buffer[i];
-      BLI_assert_msg(fcurve, "For insertion all FCurves are expected to be created before");
-      insert_vert_fcurve(fcurve, {frame, converted_rotation.values[i]}, settings, INSERTKEY_FAST);
+    times.append(last);
+    samples.append(compatible(evaluate_rotation(last), &samples.last()));
+
+    /* Preserve step transitions exactly when every varying source channel is held. */
+    bool held = true;
+    for (const FCurve *curve : evaluation_buffer) {
+      if (!curve || !curve->bezt) {
+        continue;
+      }
+      bool found;
+      int index = BKE_fcurve_bezt_binarysearch_index(curve->bezt, first, curve->totvert, &found);
+      if (!found) {
+        index--;
+      }
+      if (index >= 0 && index + 1 < curve->totvert &&
+          curve->bezt[index].ipo != BEZT_IPO_CONST) {
+        held = false;
+      }
     }
-    previous_conversion = std::move(converted_rotation);
+    if (held) {
+      for (FCurve *curve : insertion_buffer) {
+        curve->bezt[curve->totvert - 1].ipo = BEZT_IPO_CONST;
+      }
+      insert(last, samples.last(), key_settings[interval + 1]);
+      previous = samples.last();
+      continue;
+    }
+
+    const int last_index = times.size() - 1;
+    Vector<bool> keep(times.size(), false);
+    keep[0] = keep[last_index] = true;
+    Vector<std::pair<int, int>> pending;
+    pending.append({0, last_index});
+    while (!pending.is_empty()) {
+      const auto [a, b] = pending.pop_last();
+      double worst = tolerance;
+      int split = -1;
+      for (int i = a + 1; i < b; i++) {
+        const float factor = (times[i] - times[a]) / (times[b] - times[a]);
+        ed::Rotation candidate = samples[a];
+        for (const int axis : candidate.values.index_range()) {
+          candidate.values[axis] = interpf(samples[b].values[axis], samples[a].values[axis], factor);
+        }
+        const double distance = error(samples[i], candidate);
+        if (distance > worst) {
+          worst = distance;
+          split = i;
+        }
+      }
+      if (split >= 0) {
+        keep[split] = true;
+        pending.append({a, split});
+        pending.append({split, b});
+      }
+    }
+    for (int i = 1; i <= last_index; i++) {
+      if (keep[i]) {
+        auto settings = key_settings[interval + 1];
+        if (i != last_index) {
+          settings.keyframe_type = BEZT_KEYTYPE_BREAKDOWN;
+        }
+        insert(times[i], samples[i], settings);
+      }
+    }
+    previous = samples.last();
   }
 }
 
@@ -416,7 +532,10 @@ bool convert_rotation_keys(const ed::AnimTransformable &transformable,
       /* Defaulting back to the struct value means that this can have unexpected results when
        * dealing with action layers. The rotation mode can still be animated by a higher layer but
        * that means we cannot know the correct rotation mode for the current layer. */
-      rotation_mode_ranges = {{0, transformable.get_rotation_mode()}};
+      if (transformable.get_rotation_mode() == to_mode) {
+        continue;
+      }
+      rotation_mode_ranges = {{-FLT_MAX, transformable.get_rotation_mode()}};
     }
 
     modified_keys |= convert_rotation_mode_channelbag(

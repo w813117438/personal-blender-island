@@ -131,6 +131,11 @@ const EnumPropertyItem rna_enum_constraint_type_items[] = {
      "Legacy tracking constraint prone to twisting artifacts"},
 
     RNA_ENUM_ITEM_HEADING(N_("Relationship"), nullptr),
+    {CONSTRAINT_TYPE_SMART,
+     "SMART",
+     ICON_CONSTRAINT,
+     "Smart Constraint",
+     "Follow a target with recorded, jump-free influence switches"},
     {CONSTRAINT_TYPE_ACTION,
      "ACTION",
      ICON_CON_ACTION,
@@ -345,6 +350,8 @@ static StructRNA *rna_ConstraintType_refine(PointerRNA *ptr)
   switch (con->type) {
     case CONSTRAINT_TYPE_CHILDOF:
       return RNA_ChildOfConstraint;
+    case CONSTRAINT_TYPE_SMART:
+      return RNA_SmartConstraint;
     case CONSTRAINT_TYPE_TRACKTO:
       return RNA_TrackToConstraint;
     case CONSTRAINT_TYPE_KINEMATIC:
@@ -516,10 +523,35 @@ static std::optional<std::string> rna_ConstraintTarget_path(const PointerRNA *pt
   return std::nullopt;
 }
 
+static void rna_Constraint_influence_set(PointerRNA *ptr, float value)
+{
+  auto *con = static_cast<bConstraint *>(ptr->data);
+  if (con->type == CONSTRAINT_TYPE_SMART &&
+      !(ptr->owner_id->tag & ID_TAG_COPIED_ON_EVAL) && con->enforce != value)
+  {
+    auto *data = static_cast<bSmartConstraint *>(con->data);
+    if (!(data->flag & SMART_CONSTRAINT_SWITCH_PENDING)) {
+      data->previous_influence = con->enforce;
+    }
+    data->flag |= SMART_CONSTRAINT_SWITCH_PENDING;
+  }
+  con->enforce = value;
+}
+
 static void rna_Constraint_update(Main *bmain, Scene * /*scene*/, PointerRNA *ptr)
 {
   ed::object::constraint_tag_update(
       bmain, id_cast<Object *>(ptr->owner_id), static_cast<bConstraint *>(ptr->data));
+}
+
+static void rna_Constraint_influence_update(Main *bmain, Scene *scene, PointerRNA *ptr)
+{
+  if (static_cast<bConstraint *>(ptr->data)->type == CONSTRAINT_TYPE_SMART &&
+      !(ptr->owner_id->tag & ID_TAG_COPIED_ON_EVAL))
+  {
+    ed::object::constraint_smart_influence_update(bmain, scene, ptr);
+  }
+  rna_Constraint_update(bmain, scene, ptr);
 }
 
 static void rna_Constraint_dependency_update(Main *bmain, Scene * /*scene*/, PointerRNA *ptr)
@@ -1091,6 +1123,21 @@ static void rna_def_constrainttarget_bone(BlenderRNA *brna)
   RNA_def_property_update(prop, NC_OBJECT | ND_CONSTRAINT, "rna_ConstraintTarget_update");
 
   RNA_define_lib_overridable(false);
+}
+
+static void rna_def_constraint_smart(BlenderRNA *brna)
+{
+  StructRNA *srna = RNA_def_struct(brna, "SmartConstraint", "Constraint");
+  RNA_def_struct_ui_text(srna, "Smart Constraint", "Record relative transforms when influence changes");
+  RNA_def_struct_sdna_from(srna, "bSmartConstraint", "data");
+  RNA_def_struct_ui_icon(srna, ICON_CONSTRAINT);
+  rna_def_constraint_target_common(srna);
+
+  PropertyRNA *prop = RNA_def_property(srna, "binding_index", PROP_INT, PROP_NONE);
+  RNA_def_property_int_sdna(prop, nullptr, "binding_index");
+  RNA_def_property_range(prop, 0, INT_MAX);
+  RNA_def_property_ui_text(prop, "Smart Binding", "Recorded relative transform for this switch");
+  RNA_def_property_update(prop, NC_OBJECT | ND_CONSTRAINT, "rna_Constraint_update");
 }
 
 static void rna_def_constraint_childof(BlenderRNA *brna)
@@ -3884,10 +3931,11 @@ void RNA_def_constraint(BlenderRNA *brna)
   /* values */
   prop = RNA_def_property(srna, "influence", PROP_FLOAT, PROP_FACTOR);
   RNA_def_property_float_sdna(prop, nullptr, "enforce");
+  RNA_def_property_float_funcs(prop, nullptr, "rna_Constraint_influence_set", nullptr);
   RNA_def_property_range(prop, 0.0f, 1.0f);
   RNA_def_property_ui_text(
       prop, "Influence", "Amount of influence constraint will have on the final solution");
-  RNA_def_property_update(prop, NC_OBJECT | ND_CONSTRAINT, "rna_Constraint_update");
+  RNA_def_property_update(prop, NC_OBJECT | ND_CONSTRAINT, "rna_Constraint_influence_update");
 
   /* readonly values */
   prop = RNA_def_property(srna, "error_location", PROP_FLOAT, PROP_NONE);
@@ -3913,6 +3961,7 @@ void RNA_def_constraint(BlenderRNA *brna)
   rna_def_constrainttarget_bone(brna);
 
   rna_def_constraint_childof(brna);
+  rna_def_constraint_smart(brna);
   rna_def_constraint_armature_deform(brna);
   rna_def_constraint_stretch_to(brna);
   rna_def_constraint_follow_path(brna);

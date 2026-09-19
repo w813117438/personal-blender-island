@@ -1320,6 +1320,16 @@ class ShowHideMenu:
 
 
 # Standard transforms which apply to all cases (mix-in class, not used directly).
+class VIEW3D_MT_transform_handle_settings(Menu):
+    bl_label = "Transform Handle Settings"
+
+    def draw(self, context):
+        layout = self.layout
+        view = context.preferences.view
+        layout.prop(view, "transform_gizmo_speed")
+        layout.prop(view, "transform_gizmo_size")
+
+
 class VIEW3D_MT_transform_base:
     bl_label = "Transform"
     bl_category = "View"
@@ -9358,6 +9368,7 @@ class VIEW3D_AST_brush_gpencil_weight(AssetShelfHiddenByDefault, View3DAssetShel
 
 
 classes = (
+    VIEW3D_MT_transform_handle_settings,
     VIEW3D_HT_header,
     VIEW3D_HT_tool_header,
     VIEW3D_MT_editor_menus,

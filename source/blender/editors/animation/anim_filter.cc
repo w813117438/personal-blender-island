@@ -1243,6 +1243,15 @@ static bool fcurve_has_errors(bAnimContext *ac, const FCurve *fcu)
   return false;
 }
 
+/** Channel selection controls Graph Editor curve display without hiding channel-list rows. */
+static bool graph_curve_selected_for_display(const bAnimContext *ac,
+                                             const FCurve *fcu,
+                                             const eAnimFilter_Flags filter_mode)
+{
+  return ac->spacetype != SPACE_GRAPH || !(filter_mode & ANIMFILTER_CURVE_VISIBLE) ||
+         (fcu->flag & FCURVE_SELECTED) || (fcu->grp && (fcu->grp->flag & AGRP_SELECTED));
+}
+
 /* find the next F-Curve that is usable for inclusion */
 static FCurve *animfilter_fcurve_next(bAnimContext *ac,
                                       FCurve *first,
@@ -1261,6 +1270,9 @@ static FCurve *animfilter_fcurve_next(bAnimContext *ac,
    * as this gets called for groups too...
    */
   for (fcu = first; ((fcu) && (fcu->grp == grp)); fcu = fcu->next) {
+    if (!graph_curve_selected_for_display(ac, fcu, filter_mode)) {
+      continue;
+    }
     /* special exception for Pose-Channel/Sequence-Strip/Node Based F-Curves:
      * - The 'Only Selected' and 'Include Hidden' data filters should be applied to sub-ID data
      *   which can be independently selected/hidden, such as Pose-Channels, Sequence Strips,
@@ -1425,6 +1437,10 @@ static size_t animfilter_fcurves_span(bAnimContext *ac,
     /* make_new_animlistelem will return nullptr when fcu == nullptr, and that's
      * going to cause problems. */
     BLI_assert(fcu);
+
+    if (!graph_curve_selected_for_display(ac, fcu, filter_mode)) {
+      continue;
+    }
 
     if (editability_matters && (fcu->flag & FCURVE_PROTECTED)) {
       continue;
@@ -3876,6 +3892,15 @@ static size_t animdata_filter_animchan(bAnimContext *ac,
     case ANIMTYPE_NONE:
       return 0;
 
+    case ANIMTYPE_FCURVE_PROPERTY:
+      return animfilter_fcurves_span(ac,
+                                    anim_data,
+                                    {channel->property_curves, channel->property_curve_count},
+                                    channel->slot_handle,
+                                    filter_mode,
+                                    channel->id,
+                                    channel->fcurve_owner_id);
+
     case ANIMTYPE_SUMMARY:
       items += animdata_filter_dopesheet(ac, anim_data, filter_mode);
       break;
@@ -3953,6 +3978,86 @@ static size_t animdata_filter_remove_duplis(ListBaseT<bAnimListElem> *anim_data)
 }
 
 /* ----------- Public API --------------- */
+
+/** Add transient transform summaries only to the Dope Sheet's display hierarchy. */
+static void animfilter_dopesheet_transform_properties(ListBaseT<bAnimListElem> *channels,
+                                                      const eAnimFilter_Flags filter_mode)
+{
+  Vector<bAnimListElem *> curves;
+  for (bAnimListElem &ale : *channels) {
+    if (ale.type != ANIMTYPE_FCURVE || !ale.id || GS(ale.id->name) != ID_OB) {
+      continue;
+    }
+    FCurve *curve = static_cast<FCurve *>(ale.data);
+    const char *path = curve->rna_path().c_str();
+    if (!path || curve->array_index < 0 || curve->array_index > 3) {
+      continue;
+    }
+    const char *property = strrchr(path, '.');
+    property = property ? property + 1 : path;
+    if (curve->array_index == 3 &&
+        !STR_ELEM(property, "rotation_quaternion", "rotation_axis_angle")) {
+      continue;
+    }
+    if (!STR_ELEM(property, "location", "rotation_euler", "rotation_quaternion",
+                  "rotation_axis_angle", "scale") ||
+        (property != path && !STRPREFIX(path, "pose.bones[")))
+    {
+      continue;
+    }
+    curves.append(&ale);
+  }
+  for (bAnimListElem *first : curves) {
+    if (first->property_axis) {
+      continue;
+    }
+    FCurve *representative = static_cast<FCurve *>(first->data);
+    bAnimListElem *header = MEM_new<bAnimListElem>(__func__, *first);
+    header->next = header->prev = nullptr;
+    header->type = ANIMTYPE_FCURVE_PROPERTY;
+    header->datatype = ALE_FCURVE_PROPERTY;
+    header->key_data = nullptr;
+    Vector<bAnimListElem *> members;
+    for (bAnimListElem *candidate : curves) {
+      FCurve *curve = static_cast<FCurve *>(candidate->data);
+      if (!candidate->property_axis && candidate->id == first->id &&
+          candidate->fcurve_owner_id == first->fcurve_owner_id &&
+          candidate->slot_handle == first->slot_handle && curve->grp == representative->grp &&
+          STREQ(curve->rna_path().c_str(), representative->rna_path().c_str()) && members.size() < 4)
+      {
+        candidate->property_axis = true;
+        members.append(candidate);
+        header->property_curves[header->property_curve_count++] = curve;
+      }
+    }
+    BLI_insertlinkbefore(channels, first, header);
+    bAnimListElem *previous = header;
+    for (bAnimListElem *member : members) {
+      BLI_remlink(channels, member);
+      BLI_insertlinkafter(channels, previous, member);
+      previous = member;
+    }
+  }
+  if (filter_mode & ANIMFILTER_LIST_VISIBLE) {
+    bAnimListElem *header = nullptr;
+    for (bAnimListElem *ale = channels->first(); ale;) {
+      bAnimListElem *next = ale->next;
+      if (ale->type == ANIMTYPE_FCURVE_PROPERTY) {
+        header = ale;
+      }
+      else if (ale->property_axis && header) {
+        if (!(static_cast<FCurve *>(header->data)->flag & FCURVE_PROPERTY_EXPANDED)) {
+          BLI_remlink(channels, ale);
+          MEM_delete(ale);
+        }
+      }
+      else {
+        header = nullptr;
+      }
+      ale = next;
+    }
+  }
+}
 
 size_t ANIM_animdata_filter(bAnimContext *ac,
                             ListBaseT<bAnimListElem> *anim_data,
@@ -4111,6 +4216,15 @@ size_t ANIM_animdata_filter(bAnimContext *ac,
   /* remove duplicates (if required) */
   if (filter_mode & ANIMFILTER_NODUPLIS) {
     items = animdata_filter_remove_duplis(anim_data);
+  }
+
+  if (ac->spacetype == SPACE_ACTION &&
+      ELEM(ac->datatype, ANIMCONT_ACTION, ANIMCONT_DOPESHEET) &&
+      datatype != ANIMCONT_CHANNEL && (filter_mode & ANIMFILTER_LIST_CHANNELS) &&
+      !(filter_mode & (ANIMFILTER_FCURVESONLY | ANIMFILTER_TMP_PEEK | ANIMFILTER_ANIMDATA)))
+  {
+    animfilter_dopesheet_transform_properties(anim_data, filter_mode);
+    items = BLI_listbase_count(anim_data);
   }
 
   return items;

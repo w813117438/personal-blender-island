@@ -31,14 +31,17 @@
 #include "BIK_api.h"
 #include "BKE_action.hh"
 #include "BKE_armature.hh"
+#include "BKE_animsys.hh"
 #include "BKE_constraint.h"
 #include "BKE_context.hh"
 #include "BKE_fcurve.hh"
 #include "BKE_layer.hh"
+#include "BKE_lib_id.hh"
 #include "BKE_library.hh"
 #include "BKE_main.hh"
 #include "BKE_object.hh"
 #include "BKE_report.hh"
+#include "BKE_scene.hh"
 #include "BKE_tracking.hh"
 
 #include "DEG_depsgraph.hh"
@@ -64,6 +67,7 @@
 #include "ANIM_action.hh"
 #include "ANIM_action_legacy.hh"
 #include "ANIM_animdata.hh"
+#include "ANIM_keyframing.hh"
 
 #include "UI_interface.hh"
 #include "UI_interface_layout.hh"
@@ -72,6 +76,147 @@
 #include "object_intern.hh"
 
 namespace blender::ed::object {
+
+void constraint_smart_influence_update(Main *bmain, Scene *scene, PointerRNA *ptr)
+{
+  auto *con = static_cast<bConstraint *>(ptr->data);
+  auto *data = static_cast<bSmartConstraint *>(con->data);
+  if (!(data->flag & SMART_CONSTRAINT_SWITCH_PENDING) || !scene) {
+    return;
+  }
+  data->flag &= ~SMART_CONSTRAINT_SWITCH_PENDING;
+  Object *ob = id_cast<Object *>(ptr->owner_id);
+  Depsgraph *depsgraph = BKE_scene_get_depsgraph(scene, BKE_view_layer_default_view(scene));
+  if (!depsgraph || !data->tar || !ID_IS_EDITABLE(ob)) {
+    return;
+  }
+
+  bPoseChannel *owner_bone = nullptr;
+  int constraint_index = BLI_findindex(&ob->constraints, con);
+  if (constraint_index < 0 && ob->pose) {
+    for (bPoseChannel &pchan : ob->pose->chanbase) {
+      constraint_index = BLI_findindex(&pchan.constraints, con);
+      if (constraint_index >= 0) {
+        owner_bone = &pchan;
+        break;
+      }
+    }
+  }
+  if (constraint_index < 0) {
+    return;
+  }
+  const auto evaluated_constraint = [&]() -> bConstraint * {
+    Object *evaluated_ob = DEG_get_evaluated(depsgraph, ob);
+    if (owner_bone) {
+      bPoseChannel *pchan = BKE_pose_channel_find_name(evaluated_ob->pose, owner_bone->name);
+      return pchan ? static_cast<bConstraint *>(BLI_findlink(&pchan->constraints, constraint_index)) :
+                     nullptr;
+    }
+    return static_cast<bConstraint *>(BLI_findlink(&evaluated_ob->constraints, constraint_index));
+  };
+
+  const float requested = con->enforce;
+  bConstraint *evaluated_con = evaluated_constraint();
+  const float previous = evaluated_con && evaluated_con != con ? evaluated_con->enforce :
+                                                                data->previous_influence;
+  con->enforce = previous;
+  DEG_id_tag_update(&ob->id, ID_RECALC_SYNC_TO_EVAL | ID_RECALC_TRANSFORM);
+  BKE_scene_graph_update_tagged(depsgraph, bmain);
+  evaluated_con = evaluated_constraint();
+  const auto *evaluated = evaluated_con && evaluated_con->type == CONSTRAINT_TYPE_SMART ?
+                              static_cast<bSmartConstraint *>(evaluated_con->data) :
+                              nullptr;
+  if (!evaluated || !(evaluated->flag & SMART_CONSTRAINT_CACHE_VALID)) {
+    con->enforce = previous;
+    return;
+  }
+
+  float input_inverse[4][4], target_inverse[4][4];
+  if (!invert_m4_m4(input_inverse, evaluated->input_matrix) ||
+      !invert_m4_m4(target_inverse, evaluated->target_matrix))
+  {
+    con->enforce = previous;
+    return;
+  }
+  auto *binding = MEM_new<bSmartConstraintBinding>(__func__);
+  mul_m4_m4m4(binding->offset, evaluated->output_matrix, input_inverse);
+  copy_m4_m4(binding->target_inverse, target_inverse);
+  binding->frame = BKE_scene_frame_get(scene);
+  binding->influence = requested;
+
+  /* A snapshot index only has meaning for this constraint's own binding list. Do not let an
+   * automatically inserted key change another object's shared Action to an unknown snapshot. */
+  if (ob->adt && ob->adt->action && ob->adt->action->id.us > 1) {
+    auto *action_copy = reinterpret_cast<bAction *>(BKE_id_copy(bmain, &ob->adt->action->id));
+    const bool assigned = animrig::assign_action(action_copy, ob->id);
+    id_us_min(&action_copy->id);
+    if (!assigned) {
+      MEM_delete(binding);
+      con->enforce = previous;
+      return;
+    }
+  }
+
+  /* Key the snapshot selector, not its matrix components: interpolation must never mix bindings.
+   * Keeping this alongside Influence also makes editing and retiming switches explicit. */
+  Vector<RNAPath> paths = {{"binding_index"}, {"influence"}};
+  const AnimationEvalContext eval_context = BKE_animsys_eval_context_construct(
+      depsgraph, binding->frame);
+  const auto insert_switch = [&](const float frame) {
+    return animrig::insert_keyframes(bmain,
+                                    ptr,
+                                    std::nullopt,
+                                    paths.as_span(),
+                                    frame,
+                                    eval_context,
+                                    BEZT_KEYTYPE_KEYFRAME,
+                                    INSERTKEY_NOFLAGS);
+  };
+  if (BLI_listbase_count(&data->bindings) == 1 &&
+      data->bindings.first()->frame < binding->frame)
+  {
+    con->enforce = data->bindings.first()->influence;
+    data->binding_index = 0;
+    insert_switch(data->bindings.first()->frame);
+  }
+  const int old_index = data->binding_index;
+  data->binding_index = BLI_listbase_count(&data->bindings);
+  BLI_addtail(&data->bindings, binding);
+  con->enforce = requested;
+  const auto result = insert_switch(binding->frame);
+  if (result.get_count(animrig::SingleKeyingResult::SUCCESS) != 2) {
+    /* Refuse to leave an unrecorded switch in a non-keyable action. */
+    BLI_remlink(&data->bindings, binding);
+    MEM_delete(binding);
+    data->binding_index = old_index;
+    con->enforce = previous;
+  }
+  else {
+    /* Switches default to stepped keys. Intermediate influence values still blend target motion;
+     * animators can explicitly choose another interpolation on the influence channel. */
+    const std::optional<std::string> influence_path = RNA_path_from_ID_to_property(
+        ptr, RNA_struct_find_property(ptr, "influence"));
+    const std::optional<std::string> binding_path = RNA_path_from_ID_to_property(
+        ptr, RNA_struct_find_property(ptr, "binding_index"));
+    if (influence_path && ob->adt && ob->adt->action) {
+      for (FCurve *fcu : animrig::fcurves_for_action_slot(ob->adt->action->wrap(), ob->adt->slot_handle)) {
+        const bool is_binding = binding_path && fcu->rna_path() == *binding_path;
+        if (fcu->rna_path() == *influence_path || is_binding) {
+          for (int i = 0; i < fcu->totvert; i++) {
+            if (fcu->bezt && (is_binding || fcu->bezt[i].vec[1][0] == binding->frame ||
+                             fcu->bezt[i].vec[1][0] == data->bindings.first()->frame))
+            {
+              fcu->bezt[i].ipo = BEZT_IPO_CONST;
+            }
+          }
+        }
+      }
+    }
+  }
+  data->flag &= ~SMART_CONSTRAINT_SWITCH_PENDING;
+  DEG_id_tag_update(&ob->id, ID_RECALC_ANIMATION | ID_RECALC_TRANSFORM | ID_RECALC_SYNC_TO_EVAL);
+  WM_main_add_notifier(NC_ANIMATION | ND_KEYFRAME | NA_ADDED, nullptr);
+}
 
 /* ------------------------------------------------------------------- */
 /** \name Constraint Data Accessors

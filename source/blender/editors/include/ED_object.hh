@@ -418,6 +418,7 @@ void constraint_update(Main *bmain, Object *ob);
 void constraint_dependency_update(Main *bmain, Object *ob);
 
 void constraint_tag_update(Main *bmain, Object *ob, bConstraint *con);
+void constraint_smart_influence_update(Main *bmain, Scene *scene, PointerRNA *ptr);
 void constraint_dependency_tag_update(Main *bmain, Object *ob, bConstraint *con);
 
 bool constraint_move_to_index(Object *ob, bConstraint *con, int index);

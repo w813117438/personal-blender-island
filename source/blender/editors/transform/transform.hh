@@ -857,6 +857,8 @@ struct TransInfo {
 
   /** Mouse input. */
   MouseInput mouse;
+  /** Captured at invocation; keyboard transforms retain their original response. */
+  float gizmo_mouse_sensitivity;
 
   /** Proportional circle radius. */
   float prop_size;

@@ -406,6 +406,13 @@ short ANIM_animchannel_keyframes_loop(KeyframeEditData *ked,
   /* method to use depends on the type of keyframe data */
   switch (ale->datatype) {
     /* direct keyframe data (these loops are exposed) */
+    case ALE_FCURVE_PROPERTY:
+      for (int i = 0; i < ale->property_curve_count; i++) {
+        if (ANIM_fcurve_keyframes_loop(ked, ale->property_curves[i], key_ok, key_cb, fcu_cb)) {
+          return 1;
+        }
+      }
+      return 0;
     case ALE_FCURVE: /* F-Curve */
       return ANIM_fcurve_keyframes_loop(
           ked, static_cast<FCurve *>(ale->key_data), key_ok, key_cb, fcu_cb);

@@ -74,8 +74,9 @@ class OBJECT_PT_transform(ObjectButtonsPanel, Panel):
             row.prop(ob, "lock_rotation", text="", emboss=False, icon='DECORATE_UNLOCKED')
 
         row = layout.row(align=True)
-        row.prop(ob, "rotation_mode", text="Mode")
-        row.operator_menu_enum("anim.rotation_mode_convert", "mode", icon='DOWNARROW_HLT', text="")
+        row.context_pointer_set("rotation_mode_target", ob)
+        row.operator_menu_enum("anim.rotation_mode_convert", "mode",
+                               text=ob.bl_rna.properties["rotation_mode"].enum_items[ob.rotation_mode].name)
 
         col = layout.column()
         row = col.row(align=True)

@@ -421,6 +421,7 @@ enum class ChannelType {
   SCENE,
   OBJECT,
   FCURVE,
+  FCURVE_PROPERTY,
   ACTION_LAYERED,
   ACTION_SLOT,
   ACTION_LEGACY,
@@ -455,6 +456,7 @@ struct ChannelListElement {
   ID *animated_id; /* The ID that adt (below) belongs to. */
   AnimData *adt;
   FCurve *fcu;
+  const bAnimListElem *property;
   bAction *act;
   animrig::Slot *action_slot;
   bActionGroup *agrp;
@@ -478,6 +480,13 @@ static void build_channel_keylist(ChannelListElement *elem, float2 range)
     }
     case ChannelType::OBJECT: {
       ob_to_keylist(elem->ads, elem->ob, elem->keylist, elem->saction_flag, range);
+      break;
+    }
+    case ChannelType::FCURVE_PROPERTY: {
+      for (int i = 0; i < elem->property->property_curve_count; i++) {
+        fcurve_to_keylist(elem->adt, elem->property->property_curves[i], elem->keylist,
+                          elem->saction_flag, range, elem->use_nla_remapping);
+      }
       break;
     }
     case ChannelType::FCURVE: {
@@ -771,6 +780,18 @@ void ED_add_fcurve_channel(ChannelDrawList *channel_list,
   draw_elem->fcu = fcu;
   draw_elem->channel_locked = locked;
   draw_elem->use_nla_remapping = ANIM_nla_mapping_allowed(ale);
+}
+
+void ED_add_fcurve_property_channel(ChannelDrawList *channel_list,
+                                    bAnimListElem *ale, float ypos,
+                                    float yscale_fac, int saction_flag)
+{
+  ChannelListElement *elem = channel_list_add_element(
+      channel_list, ChannelType::FCURVE_PROPERTY, ypos, yscale_fac, eSAction_Flag(saction_flag));
+  elem->animated_id = ale->id;
+  elem->adt = ale->adt;
+  elem->property = ale;
+  elem->use_nla_remapping = ANIM_nla_mapping_allowed(ale);
 }
 
 void ED_add_action_group_channel(ChannelDrawList *channel_list,

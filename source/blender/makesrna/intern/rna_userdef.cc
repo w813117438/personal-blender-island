@@ -291,6 +291,17 @@ static const EnumPropertyItem rna_enum_preferences_extension_repo_source_type_it
 
 namespace blender {
 
+static float rna_userdef_transform_gizmo_size_get(PointerRNA *ptr)
+{
+  const float value = static_cast<UserDef *>(ptr->data)->transform_gizmo_size;
+  return clamp_f(value, 1.0f, 2.0f);
+}
+static float rna_userdef_transform_gizmo_speed_get(PointerRNA *ptr)
+{
+  const float value = static_cast<UserDef *>(ptr->data)->transform_gizmo_speed;
+  return value > 0.0f ? clamp_f(value, 0.1f, 1.0f) : 1.0f;
+}
+
 static void rna_userdef_version_get(PointerRNA *ptr, int *value)
 {
   UserDef *userdef = static_cast<UserDef *>(ptr->data);
@@ -5515,6 +5526,20 @@ static void rna_def_userdef_view(BlenderRNA *brna)
   RNA_def_property_int_sdna(prop, nullptr, "gizmo_size");
   RNA_def_property_range(prop, 10, 200);
   RNA_def_property_ui_text(prop, "Gizmo Size", "Diameter of the gizmo");
+  RNA_def_property_update(prop, 0, "rna_userdef_update");
+
+  prop = RNA_def_property(srna, "transform_gizmo_size", PROP_FLOAT, PROP_NONE);
+  RNA_def_property_float_funcs(prop, "rna_userdef_transform_gizmo_size_get", nullptr, nullptr);
+  RNA_def_property_range(prop, 1.0f, 2.0f);
+  RNA_def_property_ui_range(prop, 1.0f, 2.0f, 10, 2);
+  RNA_def_property_ui_text(prop, "Handle Size", "Display size and hit area of transform handles; 1 is the original size");
+  RNA_def_property_update(prop, 0, "rna_userdef_gizmo_update");
+
+  prop = RNA_def_property(srna, "transform_gizmo_speed", PROP_FLOAT, PROP_NONE);
+  RNA_def_property_float_funcs(prop, "rna_userdef_transform_gizmo_speed_get", nullptr, nullptr);
+  RNA_def_property_range(prop, 0.1f, 1.0f);
+  RNA_def_property_ui_range(prop, 0.1f, 1.0f, 10, 2);
+  RNA_def_property_ui_text(prop, "Handle Speed", "Mouse sensitivity for move, rotate and scale handles; 1 is the original speed");
   RNA_def_property_update(prop, 0, "rna_userdef_update");
 
   prop = RNA_def_property(srna, "gizmo_size_navigate_v3d", PROP_INT, PROP_PIXEL);

@@ -62,6 +62,9 @@ void draw_keyframe_shape(float x,
 
 /* Channel Drawing ------------------ */
 /* F-Curve */
+void ED_add_fcurve_property_channel(ChannelDrawList *channel_list,
+                                    bAnimListElem *ale, float ypos,
+                                    float yscale_fac, int saction_flag);
 void ED_add_fcurve_channel(ChannelDrawList *channel_list,
                            bAnimListElem *ale,
                            FCurve *fcu,

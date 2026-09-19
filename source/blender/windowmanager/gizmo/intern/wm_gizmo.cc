@@ -9,8 +9,10 @@
 #include "MEM_guardedalloc.h"
 
 #include "BLI_listbase.hh"
+#include "BLI_math_base_c.hh"
 #include "BLI_math_matrix_c.hh"
 #include "BLI_math_vector_c.hh"
+#include "BLI_string.hh"
 
 #include "BKE_context.hh"
 
@@ -471,6 +473,10 @@ void wm_gizmo_calculate_scale(wmGizmo *gz, const bContext *C)
     }
   }
 
+  if (STR_ELEM(gz->parent_gzgroup->type->idname,
+               "VIEW3D_GGT_xform_gizmo", "VIEW3D_GGT_xform_gizmo_context")) {
+    scale *= clamp_f(U.transform_gizmo_size, 1.0f, 2.0f);
+  }
   gz->scale_final = gz->scale_basis * scale;
 }
 

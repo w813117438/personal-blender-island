@@ -405,6 +405,25 @@ void ANIM_animdata_update(bAnimContext *ac, ListBaseT<bAnimListElem> *anim_data)
         ale.update &= ~ANIM_UPDATE_HANDLES;
       }
     }
+    else if (ale.datatype == ALE_FCURVE_PROPERTY) {
+      for (int i = 0; i < ale.property_curve_count; i++) {
+        FCurve *fcu = ale.property_curves[i];
+        if (ale.update & ANIM_UPDATE_ORDER) {
+          sort_time_fcurve(*fcu);
+        }
+        if (ale.update & ANIM_UPDATE_HANDLES) {
+          BKE_fcurve_handles_recalc(*fcu);
+        }
+        if (ale.update & ANIM_UPDATE_DEPS) {
+          bAnimListElem child = ale;
+          child.type = ANIMTYPE_FCURVE;
+          child.datatype = ALE_FCURVE;
+          child.data = child.key_data = fcu;
+          ANIM_list_elem_update(ac->bmain, ac->scene, &child);
+        }
+      }
+      ale.update = eAnim_Update_Flags(0);
+    }
     else if (ale.datatype == ALE_FCURVE) {
       FCurve *fcu = static_cast<FCurve *>(ale.key_data);
 

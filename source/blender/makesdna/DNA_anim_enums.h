@@ -317,6 +317,8 @@ enum eFCurve_Flags : short {
   FCURVE_AUTO_HANDLES = (1 << 5), /* Dirty. */
 #endif
   FCURVE_MOD_OFF = (1 << 6),
+  /** Dope Sheet transform-property summary is expanded. Does not affect Graph Editor. */
+  FCURVE_PROPERTY_EXPANDED = (1 << 7),
   /** skip evaluation, as RNA-path cannot be resolved
    * (similar to muting, but cannot be set by user) */
   FCURVE_DISABLED = (1 << 10),

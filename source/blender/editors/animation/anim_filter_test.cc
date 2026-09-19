@@ -136,46 +136,53 @@ TEST_F(ActionFilterTest, slots_expanded_or_not)
     ANIM_animdata_freelist(&anim_data);
   }
 
-  { /* Test with one expanded and one collapsed slot. */
+  { /* Expanded slots contain collapsed transform summaries. */
     slot_cube.set_expanded(true);
     slot_suzanne.set_expanded(false);
-
-    /* This should produce 2 slots and 2 FCurves. */
-    ListBaseT<bAnimListElem> anim_data = {nullptr, nullptr};
-    eAnimFilter_Flags filter = (ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_VISIBLE |
-                                ANIMFILTER_FOREDIT | ANIMFILTER_NODUPLIS |
-                                ANIMFILTER_LIST_CHANNELS);
-    const int num_entries = ANIM_animdata_filter(
-        &ac, &anim_data, filter, ac.data, eAnimCont_Types(ac.datatype));
-    EXPECT_EQ(4, num_entries);
-    EXPECT_EQ(4, anim_data.count());
-
-    /* First should be Cube slot. */
-    ASSERT_GE(num_entries, 1) << "Missing 1st ale, stopping to prevent crash";
-    const bAnimListElem *ale = static_cast<bAnimListElem *>(BLI_findlink(&anim_data, 0));
-    EXPECT_EQ(ANIMTYPE_ACTION_SLOT, ale->type);
-    EXPECT_EQ(&slot_cube, ale->data);
-
-    /* After that the Cube's FCurves. */
-    ASSERT_GE(num_entries, 2) << "Missing 2nd ale, stopping to prevent crash";
-    ale = static_cast<bAnimListElem *>(BLI_findlink(&anim_data, 1));
-    EXPECT_EQ(ANIMTYPE_FCURVE, ale->type);
-    EXPECT_EQ(fcu_cube_loc_x, ale->data);
-    EXPECT_EQ(slot_cube.handle, ale->slot_handle);
-
-    ASSERT_GE(num_entries, 3) << "Missing 3rd ale, stopping to prevent crash";
-    ale = static_cast<bAnimListElem *>(BLI_findlink(&anim_data, 2));
-    EXPECT_EQ(ANIMTYPE_FCURVE, ale->type);
-    EXPECT_EQ(fcu_cube_loc_y, ale->data);
-    EXPECT_EQ(slot_cube.handle, ale->slot_handle);
-
-    /* And finally the Suzanne slot. */
-    ASSERT_GE(num_entries, 4) << "Missing 4th ale, stopping to prevent crash";
-    ale = static_cast<bAnimListElem *>(BLI_findlink(&anim_data, 3));
-    EXPECT_EQ(ANIMTYPE_ACTION_SLOT, ale->type);
-    EXPECT_EQ(&slot_suzanne, ale->data);
-
+    ListBaseT<bAnimListElem> anim_data = {};
+    const eAnimFilter_Flags filter = ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_VISIBLE |
+                                      ANIMFILTER_LIST_CHANNELS | ANIMFILTER_NODUPLIS;
+    EXPECT_EQ(3, ANIM_animdata_filter(&ac, &anim_data, filter, ac.data, ANIMCONT_ACTION));
+    bAnimListElem *summary = anim_data.first()->next;
+    ASSERT_EQ(ANIMTYPE_FCURVE_PROPERTY, summary->type);
+    EXPECT_EQ(2, summary->property_curve_count);
+    EXPECT_EQ(fcu_cube_loc_x, summary->property_curves[0]);
+    EXPECT_EQ(fcu_cube_loc_y, summary->property_curves[1]);
+    EXPECT_EQ(&slot_suzanne, summary->next->data);
+    ANIM_channel_setting_set(&ac, summary, ACHANNEL_SETTING_EXPAND, ACHANNEL_SETFLAG_ADD);
     ANIM_animdata_freelist(&anim_data);
+
+    EXPECT_EQ(5, ANIM_animdata_filter(&ac, &anim_data, filter, ac.data, ANIMCONT_ACTION));
+    summary = anim_data.first()->next;
+    EXPECT_EQ(ANIMTYPE_FCURVE_PROPERTY, summary->type);
+    EXPECT_TRUE(summary->next->property_axis);
+    EXPECT_EQ(fcu_cube_loc_x, summary->next->data);
+    EXPECT_EQ(fcu_cube_loc_y, summary->next->next->data);
+    ANIM_channel_setting_set(&ac, summary, ACHANNEL_SETTING_SELECT, ACHANNEL_SETFLAG_CLEAR);
+    EXPECT_FALSE(fcu_cube_loc_x->flag & FCURVE_SELECTED);
+    EXPECT_FALSE(fcu_cube_loc_y->flag & FCURVE_SELECTED);
+    ANIM_channel_setting_set(&ac, summary, ACHANNEL_SETTING_SELECT, ACHANNEL_SETFLAG_ADD);
+    EXPECT_TRUE(fcu_cube_loc_x->flag & FCURVE_SELECTED);
+    EXPECT_TRUE(fcu_cube_loc_y->flag & FCURVE_SELECTED);
+    ANIM_channel_setting_set(&ac, summary, ACHANNEL_SETTING_EXPAND, ACHANNEL_SETFLAG_CLEAR);
+    ANIM_animdata_freelist(&anim_data);
+
+    /* Data operations still get each F-Curve exactly once, including collapsed axes. */
+    EXPECT_EQ(4, ANIM_animdata_filter(&ac, &anim_data,
+        ANIMFILTER_DATA_VISIBLE | ANIMFILTER_FCURVESONLY, ac.data, ANIMCONT_ACTION));
+    for (const bAnimListElem &ale : anim_data) {
+      EXPECT_EQ(ANIMTYPE_FCURVE, ale.type);
+      EXPECT_FALSE(ale.property_axis);
+    }
+    ANIM_animdata_freelist(&anim_data);
+
+    /* The Graph Editor must keep the original channel list and names. */
+    ac.spacetype = SPACE_GRAPH;
+    EXPECT_EQ(4, ANIM_animdata_filter(&ac, &anim_data, filter, ac.data, ANIMCONT_ACTION));
+    EXPECT_EQ(ANIMTYPE_FCURVE, anim_data.first()->next->type);
+    EXPECT_FALSE(anim_data.first()->next->property_axis);
+    ANIM_animdata_freelist(&anim_data);
+    ac.spacetype = SPACE_ACTION;
   }
 
   { /* Test one expanded and one collapsed slot, and one Slot and one FCurve selected. */
@@ -197,9 +204,10 @@ TEST_F(ActionFilterTest, slots_expanded_or_not)
     EXPECT_EQ(2, num_entries);
     EXPECT_EQ(2, anim_data.count());
 
-    /* First should be Cube's selected FCurve. */
+    /* First should summarize only Cube's selected FCurve. */
     const bAnimListElem *ale = static_cast<bAnimListElem *>(BLI_findlink(&anim_data, 0));
-    EXPECT_EQ(ANIMTYPE_FCURVE, ale->type);
+    EXPECT_EQ(ANIMTYPE_FCURVE_PROPERTY, ale->type);
+    EXPECT_EQ(1, ale->property_curve_count);
     EXPECT_EQ(fcu_cube_loc_y, ale->data);
 
     /* Second the Suzanne slot, as that's the only selected slot. */

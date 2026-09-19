@@ -525,6 +525,14 @@ void applyMouseInput(TransInfo *t, MouseInput *mi, const float2 &mval, float out
     mi->apply(t, mi, mval_db, output);
   }
 
+  if (mi->apply && t->gizmo_mouse_sensitivity != 1.0f) {
+    const float neutral = t->mode == TFM_RESIZE ? 1.0f : 0.0f;
+    const int components = mi->apply == InputVector ? 3 : mi->apply == InputTrackBall ? 2 : 1;
+    for (int i = 0; i < components; i++) {
+      output[i] = neutral + (output[i] - neutral) * t->gizmo_mouse_sensitivity;
+    }
+  }
+
   if (mi->post) {
     mi->post(t, output);
   }

@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "MEM_guardedalloc.h"
+#include "BLI_string.hh"
 
 #include "DNA_screen_types.h"
 
@@ -596,6 +597,17 @@ bool popup_context_menu_for_button(bContext *C, Button *but, const wmEvent *even
 
   set_layout_context_from_button(C, layout, but);
   layout.operator_context_set(wm::OpCallContext::InvokeDefault);
+
+  if (but_is_tool(but) && CTX_wm_view3d(C)) {
+    char tool_id[64];
+    RNA_string_get(but->opptr, "name", tool_id);
+    if (STR_ELEM(tool_id, "builtin.move", "builtin.rotate", "builtin.scale", "builtin.transform")) {
+      PointerRNA prefs = RNA_pointer_create_discrete(nullptr, RNA_PreferencesView, &U);
+      layout.prop(&prefs, "transform_gizmo_speed", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+      layout.prop(&prefs, "transform_gizmo_size", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+      layout.separator();
+    }
+  }
 
   const bool is_disabled = but->flag & BUT_DISABLED;
 
