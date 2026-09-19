@@ -668,7 +668,7 @@ static std::string wm_window_title_text(
     win_title.append(fmt::format(" - {}", project->get_name()));
   }
 
-  win_title.append(fmt::format(" — Blender {}", BKE_blender_version_string()));
+  win_title.append(" — blender-island v0.1");
 
   return win_title;
 }

@@ -98,9 +98,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     return -1;
   }
 
-  /* Add blender.exe to path, resulting in the full path to the blender executable. */
-  if (PathCchCombine(path, MAX_PATH, path, L"blender.exe") != S_OK) {
+  /* Prefer the Island release executable; development builds can retain Blender's target name. */
+  if (PathCchCombine(path, MAX_PATH, path, L"blender-island.exe") != S_OK) {
     return -1;
+  }
+  if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+    if (PathCchRemoveFileSpec(path, MAX_PATH) != S_OK ||
+        PathCchCombine(path, MAX_PATH, path, L"blender.exe") != S_OK)
+    {
+      return -1;
+    }
   }
 
   int required_size_chars = lstrlenW(path) +     /* Module name. */

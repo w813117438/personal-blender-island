@@ -13,8 +13,8 @@ APPICON ICON DISCARDABLE "winblender.ico"
 BLENDERFILE ICON DISCARDABLE "winblenderfile.ico"
 
 IDR_VERSION1 VERSIONINFO
-FILEVERSION BLEN_VER_RC_1, BLEN_VER_RC_2, BLEN_VER_RC_3, BLEN_VER_RC_4
-PRODUCTVERSION BLEN_VER_RC_1, BLEN_VER_RC_2, BLEN_VER_RC_3, BLEN_VER_RC_4
+FILEVERSION 0, 1, 0, 0
+PRODUCTVERSION 0, 1, 0, 0
 FILEOS 0x00000004
 FILETYPE 0x00000001
 BEGIN
@@ -22,13 +22,13 @@ BEGIN
   BEGIN
     BLOCK "04090000"
     BEGIN
-      VALUE "FileVersion", BLEN_VER_RC_STR
-      VALUE "ProductVersion", BLEN_VER_RC_STR
+      VALUE "FileVersion", "0.1.0.0"
+      VALUE "ProductVersion", "v0.1"
       VALUE "CompanyName", "Blender Foundation"
-      VALUE "FileDescription", "Blender"
+      VALUE "FileDescription", "blender-island"
       VALUE "LegalCopyright", "GPLv3 (Blender Foundation)"
-      VALUE "OriginalFilename", "blender.exe"
-      VALUE "ProductName", "Blender"
+      VALUE "OriginalFilename", "blender-island.exe"
+      VALUE "ProductName", "blender-island"
     END
   END
   BLOCK "VarFileInfo"
