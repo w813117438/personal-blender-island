@@ -1,5 +1,7 @@
 # 一键编译并启动 Blender
 
+手指 Picker 已内置在 3D 视口的 **N → 手指选择** 页签，支持通用手动绑定和多选，绑定随 `.blend` 保存。用法见 [FINGER-PICKER.md](FINGER-PICKER.md)。
+
 日常使用请双击根目录 `Open-Blender.cmd`：直接打开已经编译好的 Blender，不检查网络、不下载、不编译，并复用保存中文等偏好设置的配置目录。修改源码后需要测试新代码时，再运行 `Build-And-Run.cmd`。
 
 双击源码根目录的 `Build-And-Run.cmd`。

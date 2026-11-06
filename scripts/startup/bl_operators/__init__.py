@@ -13,6 +13,7 @@ if "bpy" in locals():
 _modules = [
     "add_mesh_torus",
     "anim",
+    "island_finger_picker",
     "assets",
     "bone_selection_sets",
     "clip",
@@ -64,6 +65,7 @@ def register():
     from . import (
         bone_selection_sets,
         copy_global_transform,
+        island_finger_picker,
     )
 
     for mod in _modules_loaded:
@@ -71,6 +73,7 @@ def register():
             register_class(cls)
 
     bone_selection_sets.register()
+    island_finger_picker.register()
     copy_global_transform.register()
     project.register()
 
@@ -80,8 +83,10 @@ def unregister():
     from . import (
         bone_selection_sets,
         copy_global_transform,
+        island_finger_picker,
     )
 
+    island_finger_picker.unregister()
     bone_selection_sets.unregister()
     copy_global_transform.unregister()
     project.unregister()

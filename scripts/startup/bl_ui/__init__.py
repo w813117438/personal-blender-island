@@ -93,6 +93,7 @@ _modules = [
     "space_view3d",
     "space_view3d_sidebar",
     "space_view3d_toolbar",
+    "space_view3d_island_picker",
 
     # XXX, keep last so panels show after all other tool options.
     "properties_workspace",
