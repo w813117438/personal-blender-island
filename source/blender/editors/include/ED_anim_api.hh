@@ -444,6 +444,9 @@ enum eAnimFilter_Flags {
    */
   ANIMFILTER_FCURVESONLY = (1 << 12),
 
+  /** Restrict graph curves to channel-list focus when any exists (internal use only). */
+  ANIMFILTER_TMP_GRAPH_FOCUS = (1 << 29),
+
   /** for checking if we should keep some collapsed channel around (internal use only!) */
   ANIMFILTER_TMP_PEEK = (1 << 30),
 

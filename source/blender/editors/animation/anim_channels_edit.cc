@@ -3533,6 +3533,31 @@ static void ANIM_OT_channels_select_filter(wmOperatorType *ot)
 /** \name Select All Operator
  * \{ */
 
+/* Curve/key selection in the canvas must not change display focus. Snapshot channel-list
+ * selection only at the end of an explicit channel selection operator. */
+static void graph_channel_display_focus_update(bAnimContext *ac)
+{
+  if (ac->spacetype != SPACE_GRAPH) {
+    return;
+  }
+  ListBaseT<bAnimListElem> channels = {};
+  ANIM_animdata_filter(ac,
+                       &channels,
+                       ANIMFILTER_DATA_VISIBLE | ANIMFILTER_FCURVESONLY | ANIMFILTER_NODUPLIS,
+                       ac->data,
+                       ac->datatype);
+  for (bAnimListElem &ale : channels) {
+    if (!ELEM(ale.type, ANIMTYPE_FCURVE, ANIMTYPE_NLACURVE)) {
+      continue;
+    }
+    FCurve *fcu = static_cast<FCurve *>(ale.data);
+    const bool selected = (fcu->flag & FCURVE_SELECTED) ||
+                          (fcu->grp && (fcu->grp->flag & AGRP_SELECTED));
+    SET_FLAG_FROM_TEST(fcu->flag, selected, FCURVE_GRAPH_CHANNEL_FOCUS);
+  }
+  ANIM_animdata_freelist(&channels);
+}
+
 static wmOperatorStatus animchannels_selectall_exec(bContext *C, wmOperator *op)
 {
   bAnimContext ac;
@@ -3561,6 +3586,8 @@ static wmOperatorStatus animchannels_selectall_exec(bContext *C, wmOperator *op)
       BLI_assert(0);
       break;
   }
+
+  graph_channel_display_focus_update(&ac);
 
   /* send notifier that things have changed */
   WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN | NA_SELECTED, nullptr);
@@ -3745,6 +3772,7 @@ static wmOperatorStatus animchannels_box_select_exec(bContext *C, wmOperator *op
 
   /* apply box_select animation channels */
   box_select_anim_channels(&ac, rect, selectmode);
+  graph_channel_display_focus_update(&ac);
 
   /* send notifier that things have changed */
   WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN | NA_SELECTED, nullptr);
@@ -4686,6 +4714,9 @@ static wmOperatorStatus animchannels_mouseclick_invoke(bContext *C,
 
   /* handle mouse-click in the relevant channel then */
   notifierFlags = mouse_anim_channels(C, &ac, channel_index, selectmode);
+  if (notifierFlags & NA_SELECTED) {
+    graph_channel_display_focus_update(&ac);
+  }
 
   /* set notifier that things have changed */
   WM_event_add_notifier(C, NC_ANIMATION | notifierFlags, nullptr);

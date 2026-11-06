@@ -1244,12 +1244,12 @@ static bool fcurve_has_errors(bAnimContext *ac, const FCurve *fcu)
 }
 
 /** Channel selection controls Graph Editor curve display without hiding channel-list rows. */
-static bool graph_curve_selected_for_display(const bAnimContext *ac,
-                                             const FCurve *fcu,
+static bool graph_curve_selected_for_display(const FCurve *fcu,
                                              const eAnimFilter_Flags filter_mode)
 {
-  return ac->spacetype != SPACE_GRAPH || !(filter_mode & ANIMFILTER_CURVE_VISIBLE) ||
-         (fcu->flag & FCURVE_SELECTED) || (fcu->grp && (fcu->grp->flag & AGRP_SELECTED));
+  return !(filter_mode & ANIMFILTER_TMP_GRAPH_FOCUS) ||
+         !(filter_mode & ANIMFILTER_CURVE_VISIBLE) ||
+         (fcu->flag & FCURVE_GRAPH_CHANNEL_FOCUS);
 }
 
 /* find the next F-Curve that is usable for inclusion */
@@ -1270,7 +1270,7 @@ static FCurve *animfilter_fcurve_next(bAnimContext *ac,
    * as this gets called for groups too...
    */
   for (fcu = first; ((fcu) && (fcu->grp == grp)); fcu = fcu->next) {
-    if (!graph_curve_selected_for_display(ac, fcu, filter_mode)) {
+    if (!graph_curve_selected_for_display(fcu, filter_mode)) {
       continue;
     }
     /* special exception for Pose-Channel/Sequence-Strip/Node Based F-Curves:
@@ -1438,7 +1438,7 @@ static size_t animfilter_fcurves_span(bAnimContext *ac,
      * going to cause problems. */
     BLI_assert(fcu);
 
-    if (!graph_curve_selected_for_display(ac, fcu, filter_mode)) {
+    if (!graph_curve_selected_for_display(fcu, filter_mode)) {
       continue;
     }
 
@@ -4061,12 +4061,35 @@ static void animfilter_dopesheet_transform_properties(ListBaseT<bAnimListElem> *
 
 size_t ANIM_animdata_filter(bAnimContext *ac,
                             ListBaseT<bAnimListElem> *anim_data,
-                            const eAnimFilter_Flags filter_mode,
+                            eAnimFilter_Flags filter_mode,
                             void *data,
                             const eAnimCont_Types datatype)
 {
   if (!data || !anim_data) {
     return 0;
+  }
+
+  if (ac && ac->spacetype == SPACE_GRAPH && (filter_mode & ANIMFILTER_CURVE_VISIBLE)) {
+    /* Check all displayed data, rather than individual groups or objects. Without channel-list
+     * focus, use Blender's normal visibility rules. Omit CURVE_VISIBLE in this pass so it cannot
+     * recurse into this check or hide channel-list rows. */
+    ListBaseT<bAnimListElem> candidates = {};
+    ANIM_animdata_filter(ac,
+                         &candidates,
+                         ANIMFILTER_DATA_VISIBLE | ANIMFILTER_FCURVESONLY | ANIMFILTER_NODUPLIS,
+                         data,
+                         datatype);
+    for (const bAnimListElem &candidate : candidates) {
+      if (!ELEM(candidate.type, ANIMTYPE_FCURVE, ANIMTYPE_NLACURVE)) {
+        continue;
+      }
+      const FCurve *fcu = static_cast<const FCurve *>(candidate.data);
+      if (fcu->flag & FCURVE_GRAPH_CHANNEL_FOCUS) {
+        filter_mode |= ANIMFILTER_TMP_GRAPH_FOCUS;
+        break;
+      }
+    }
+    ANIM_animdata_freelist(&candidates);
   }
 
   size_t items = 0;
