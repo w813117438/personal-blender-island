@@ -769,6 +769,11 @@ add_blender_test(
 )
 
 add_blender_test(
+  island_animation_inbetween
+  --python ${CMAKE_CURRENT_LIST_DIR}/animation_inbetween.py
+)
+
+add_blender_test(
   bl_animation_context_markers
   --python ${TEST_PYTHON_DIR}/bl_animation_context_markers.py
 )

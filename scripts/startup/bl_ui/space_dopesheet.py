@@ -213,6 +213,8 @@ class DOPESHEET_HT_header(Header):
             layout.prop(st, "ui_mode", text="")
 
         DOPESHEET_MT_editor_menus.draw_collapsible(context, layout)
+        if st.mode in {'DOPESHEET', 'ACTION', 'SHAPEKEY', 'TIMELINE'}:
+            layout.popover(panel="DOPESHEET_PT_island_inbetween_popover", text="中间帧")
         DOPESHEET_HT_editor_buttons.draw_header(context, layout)
 
 

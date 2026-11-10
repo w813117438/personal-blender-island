@@ -14,6 +14,7 @@ _modules = [
     "add_mesh_torus",
     "anim",
     "island_finger_picker",
+    "island_inbetween",
     "assets",
     "bone_selection_sets",
     "clip",
@@ -74,6 +75,7 @@ def register():
 
     bone_selection_sets.register()
     island_finger_picker.register()
+    island_inbetween.register()
     copy_global_transform.register()
     project.register()
 
@@ -86,6 +88,7 @@ def unregister():
         island_finger_picker,
     )
 
+    island_inbetween.unregister()
     island_finger_picker.unregister()
     bone_selection_sets.unregister()
     copy_global_transform.unregister()

@@ -56,6 +56,8 @@ class GRAPH_HT_header(Header):
         # layout.prop(st, "mode", text="")
 
         GRAPH_MT_editor_menus.draw_collapsible(context, layout)
+        if st.mode == 'FCURVES':
+            layout.popover(panel="GRAPH_PT_island_inbetween_popover", text="中间帧")
 
         row = layout.row(align=True)
         row.prop(st, "use_normalization", icon='NORMALIZE_FCURVES', text="Normalize", toggle=True)
