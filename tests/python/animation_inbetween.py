@@ -10,6 +10,7 @@ import importlib.util
 from contextlib import contextmanager
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 import bpy
@@ -79,7 +80,7 @@ class InbetweenTest(unittest.TestCase):
         return bpy.ops.anim.island_inbetween(operation=operation, frames=frames, mode=mode, scope=scope)
 
     @contextmanager
-    def editor(self, editor_type):
+    def editor(self, editor_type, mode=None):
         # This changes only the screen belonging to this background test process.
         window = bpy.context.window
         area = next(area for area in window.screen.areas if area.type == 'VIEW_3D')
@@ -87,7 +88,7 @@ class InbetweenTest(unittest.TestCase):
         try:
             area.type = editor_type
             space = area.spaces.active
-            space.mode = 'FCURVES' if editor_type == 'GRAPH_EDITOR' else 'DOPESHEET'
+            space.mode = mode or ('FCURVES' if editor_type == 'GRAPH_EDITOR' else 'DOPESHEET')
             region = next(region for region in area.regions if region.type == 'WINDOW')
             with bpy.context.temp_override(window=window, area=area, region=region):
                 space.dopesheet.show_only_selected = True
@@ -96,6 +97,18 @@ class InbetweenTest(unittest.TestCase):
                 yield space
         finally:
             area.type = previous_type
+
+    def focus_channel(self, owner, selected):
+        """Exercise the left-channel-list focus, not merely key/curve selection."""
+        bag = channelbag(owner)
+        for group in bag.groups:
+            group.select = False
+        for curve in bag.fcurves:
+            curve.select = curve == selected
+        # The custom Graph Editor stores display focus when channel-list operators
+        # run. Two inversions leave the intended X-only channel selection intact.
+        bpy.ops.anim.channels_select_all(action='INVERT')
+        bpy.ops.anim.channels_select_all(action='INVERT')
 
     def assert_cancelled(self, **kwargs):
         # WARNING cancellations return normally; ERROR cancellations raise.
@@ -354,7 +367,7 @@ class InbetweenTest(unittest.TestCase):
         self.assertEqual(times(locked), [1, 10, 20])
         self.assertEqual(times(grouped), [1, 10, 20])
 
-    def test_graph_context_respects_hidden_locked_and_filtered_curves(self):
+    def test_explicit_graph_editor_scope_respects_hidden_locked_and_filtered_curves(self):
         obj = self.object('Selected')
         editable = self.animate(obj)
         hidden = self.animate(obj, path='location', index=0)
@@ -370,12 +383,12 @@ class InbetweenTest(unittest.TestCase):
             self.assertIn(editable, visible)
             for curve in (hidden, locked, filtered):
                 self.assertNotIn(curve, visible)
-            self.assertEqual(self.run_operation(), {'FINISHED'})
+            self.assertEqual(self.run_operation(scope='EDITOR'), {'FINISHED'})
         self.assertEqual(times(editable), [1, 11, 21])
         for curve in (hidden, locked, filtered):
             self.assertEqual(times(curve), [1, 10, 20])
 
-    def test_dopesheet_context_respects_selection_filter_and_locks(self):
+    def test_explicit_dopesheet_editor_scope_respects_selection_filter_and_locks(self):
         obj = self.object('Selected')
         editable = self.animate(obj)
         locked = self.animate(obj, path='location', index=0)
@@ -389,10 +402,146 @@ class InbetweenTest(unittest.TestCase):
             self.assertIn(editable, visible)
             self.assertNotIn(locked, visible)
             self.assertNotIn(filtered, visible)
-            self.assertEqual(self.run_operation(), {'FINISHED'})
+            self.assertEqual(self.run_operation(scope='EDITOR'), {'FINISHED'})
         self.assertEqual(times(editable), [1, 11, 21])
         self.assertEqual(times(locked), [1, 10, 20])
         self.assertEqual(times(filtered), [1, 10, 20])
+
+    def test_default_graph_scope_moves_all_selected_object_channels_with_x_focused(self):
+        obj = self.object('Selected')
+        curves = [self.animate(obj, path=path, index=axis)
+                  for path in ('location', 'rotation_euler', 'scale') for axis in range(3)]
+        curves.append(self.animate(obj))
+        other = self.object('Unselected')
+        untouched = self.animate(other)
+        other.select_set(False)
+        bpy.context.view_layer.objects.active = obj
+        with self.editor('GRAPH_EDITOR'):
+            self.focus_channel(obj, curves[0])
+            self.assertEqual(list(bpy.context.editable_fcurves), [curves[0]])
+            # Omit scope intentionally: this is the user-facing default contract.
+            self.assertEqual(bpy.ops.anim.island_inbetween(frames=2), {'FINISHED'})
+            for curve in curves:
+                self.assertEqual(times(curve), [1, 12, 22])
+            self.assertEqual(times(untouched), [1, 10, 20])
+            self.assertEqual(bpy.ops.anim.island_inbetween(operation='REMOVE', frames=2), {'FINISHED'})
+        for curve in curves + [untouched]:
+            self.assertEqual(times(curve), [1, 10, 20])
+
+    def test_default_graph_scope_ignores_visibility_and_search_but_respects_locks(self):
+        obj = self.object('Selected')
+        curves = [self.animate(obj, path='location', index=axis) for axis in range(3)]
+        hidden = self.animate(obj, path='rotation_euler', index=0)
+        hidden.hide = True
+        curves[1].lock = True
+        group = channelbag(obj).groups.new('Protected')
+        curves[2].group = group
+        group.lock = True
+        other = self.object('Unselected')
+        untouched = self.animate(other)
+        other.select_set(False)
+        bpy.context.view_layer.objects.active = obj
+        with self.editor('GRAPH_EDITOR') as space:
+            self.focus_channel(obj, curves[0])
+            space.dopesheet.filter_fcurve_name = 'no curve can match this filter'
+            self.assertEqual(list(bpy.context.editable_fcurves or ()), [])
+            self.assertEqual(bpy.ops.anim.island_inbetween(), {'FINISHED'})
+        for curve in (curves[0], hidden):
+            self.assertEqual(times(curve), [1, 11, 21])
+        for curve in (curves[1], curves[2], untouched):
+            self.assertEqual(times(curve), [1, 10, 20])
+
+    def test_explicit_editor_scope_keeps_single_axis_focus(self):
+        obj = self.object()
+        curves = [self.animate(obj, path='location', index=axis) for axis in range(3)]
+        with self.editor('GRAPH_EDITOR'):
+            self.focus_channel(obj, curves[0])
+            self.assertEqual(list(bpy.context.editable_fcurves), [curves[0]])
+            self.assertEqual(self.run_operation(scope='EDITOR'), {'FINISHED'})
+        self.assertEqual(times(curves[0]), [1, 11, 21])
+        for curve in curves[1:]:
+            self.assertEqual(times(curve), [1, 10, 20])
+
+    def test_default_selected_key_mode_ripples_unselected_axes(self):
+        obj = self.object()
+        curves = [self.animate(obj, (1, 5, 10, 20), path='location', index=axis) for axis in range(3)]
+        select_keys(curves[0], (1, 5, 10))
+        with self.editor('GRAPH_EDITOR'):
+            self.focus_channel(obj, curves[0])
+            self.assertEqual(list(bpy.context.editable_fcurves), [curves[0]])
+            self.assertEqual(bpy.ops.anim.island_inbetween(mode='SELECTED', frames=2), {'FINISHED'})
+            for curve in curves:
+                self.assertEqual(times(curve), [1, 7, 14, 24])
+            self.assertEqual(bpy.ops.anim.island_inbetween(
+                operation='REMOVE', mode='SELECTED', frames=2), {'FINISHED'})
+        for curve in curves:
+            self.assertEqual(times(curve), [1, 5, 10, 20])
+        for curve in curves[1:]:
+            self.assertFalse(any(key.select_control_point for key in curve.keyframe_points))
+
+    def assert_pose_scope_ignores_editor_filter(self, editor_type, mode=None):
+        rig = self.object(data=bpy.data.armatures.new('Rig'))
+        bpy.ops.object.mode_set(mode='EDIT')
+        for name in ('Selected', 'Other'):
+            bone = rig.data.edit_bones.new(name)
+            bone.head = (0, 0, 0)
+            bone.tail = (0, 0, 1)
+        bpy.ops.object.mode_set(mode='POSE')
+        selected = rig.pose.bones['Selected']
+        other = rig.pose.bones['Other']
+        selected.select = True
+        other.select = False
+        selected['stretch'] = 1.0
+        selected_curves = [self.animate(rig, path=selected.path_from_id('location'), index=axis)
+                           for axis in range(3)]
+        selected_curves.append(self.animate(rig, path=selected.path_from_id() + '["stretch"]'))
+        untouched = [self.animate(rig, path=other.path_from_id('location'), index=axis)
+                     for axis in range(3)]
+        untouched.append(self.animate(rig, path='location', index=0))
+        rig.data.bones.active = selected.bone
+        with self.editor(editor_type, mode) as space:
+            if editor_type == 'GRAPH_EDITOR':
+                self.focus_channel(rig, selected_curves[0])
+                self.assertEqual(list(bpy.context.editable_fcurves), [selected_curves[0]])
+            # Channel filtering must not alter which pose bones the context owns.
+            self.assertEqual({bone.name for bone in bpy.context.selected_pose_bones}, {'Selected'})
+            selected_curves[1].hide = True
+            if editor_type == 'GRAPH_EDITOR':
+                space.dopesheet.filter_fcurve_name = 'exclude every visible curve'
+            else:
+                space.dopesheet.filter_text = 'exclude every visible channel'
+            self.assertEqual(list(bpy.context.editable_fcurves or ()), [])
+            self.assertEqual(bpy.ops.anim.island_inbetween(), {'FINISHED'})
+        for curve in selected_curves:
+            self.assertEqual(times(curve), [1, 11, 21])
+        for curve in untouched:
+            self.assertEqual(times(curve), [1, 10, 20])
+
+    def test_default_graph_scope_moves_all_channels_of_selected_pose_bones(self):
+        self.assert_pose_scope_ignores_editor_filter('GRAPH_EDITOR')
+
+    def test_default_dopesheet_scope_moves_all_channels_of_selected_pose_bones(self):
+        self.assert_pose_scope_ignores_editor_filter('DOPESHEET_EDITOR')
+
+    def test_default_timeline_scope_moves_all_channels_of_selected_pose_bones(self):
+        self.assert_pose_scope_ignores_editor_filter('DOPESHEET_EDITOR', 'TIMELINE')
+
+    def test_scope_values_preserve_saved_scene_settings(self):
+        self.assertEqual(self.scene.island_inbetween.scope, 'CONTEXT')
+        expected = {0: 'CONTEXT', 1: 'SCENE', 2: 'EDITOR'}
+        for number in expected:
+            scene = bpy.data.scenes.new(f'Scope {number}')
+            # Version 0.1.3 files persist enum values as integers. Inserting EDITOR
+            # between the existing menu items must not reinterpret SCENE=1.
+            scene.island_inbetween['scope'] = number
+        with tempfile.TemporaryDirectory(prefix='island-inbetween-scope-') as directory:
+            path = str(Path(directory) / 'scope-settings.blend')
+            bpy.ops.wm.save_as_mainfile(filepath=path)
+            bpy.ops.wm.open_mainfile(filepath=path)
+            for number, identifier in expected.items():
+                self.assertEqual(bpy.data.scenes[f'Scope {number}'].island_inbetween.scope, identifier)
+            self.scene = bpy.context.scene
+            self.assertEqual(self.scene.island_inbetween.scope, 'CONTEXT')
 
     def test_scene_scope_ignores_graph_visibility_and_object_filter(self):
         obj = self.object('Selected')
@@ -507,28 +656,29 @@ class InbetweenTest(unittest.TestCase):
         self.assert_cancelled()
         self.assertEqual(times(curve), [1, 10, 20])
 
-    def test_operation_supports_undo_and_redo(self):
+    def test_default_operation_supports_undo_and_redo_for_all_axes(self):
         obj = self.object('Undo object')
-        self.animate(obj)
+        curves = [self.animate(obj, path='location', index=axis) for axis in range(3)]
         bpy.context.preferences.edit.use_global_undo = True
-        # Background Blender has no initial memfile undo state.
-        bpy.ops.ed.undo_push(message='Initial inbetween fixture')
-        bpy.ops.ed.undo_push(message='Before inserting empty frames')
-        result = bpy.ops.anim.island_inbetween(
-            'EXEC_DEFAULT', True, operation='INSERT', frames=2, mode='CURRENT', scope='CONTEXT')
-        self.assertEqual(result, {'FINISHED'})
 
         def restored_times():
             # Undo can replace the IDs and their nested RNA data.
             owner = bpy.data.objects['Undo object']
-            curve = channelbag(owner).fcurves.find('["inbetween_test"]', index=0)
-            return times(curve)
+            return [times(channelbag(owner).fcurves.find('location', index=axis)) for axis in range(3)]
 
-        self.assertEqual(restored_times(), [1, 12, 22])
+        # Keep global undo in the factory context. A newly created background
+        # Graph Editor cannot initialize its redo HUD without a window eventstate.
+        # The focused Graph Editor's default channel scope is tested separately.
+        bpy.ops.ed.undo_push(message='Initial inbetween fixture')
+        bpy.ops.ed.undo_push(message='Before inserting empty frames')
+        result = bpy.ops.anim.island_inbetween(
+            'EXEC_DEFAULT', True, operation='INSERT', frames=2, mode='CURRENT')
+        self.assertEqual(result, {'FINISHED'})
+        self.assertEqual(restored_times(), [[1, 12, 22]] * 3)
         self.assertEqual(bpy.ops.ed.undo(), {'FINISHED'})
-        self.assertEqual(restored_times(), [1, 10, 20])
+        self.assertEqual(restored_times(), [[1, 10, 20]] * 3)
         self.assertEqual(bpy.ops.ed.redo(), {'FINISHED'})
-        self.assertEqual(restored_times(), [1, 12, 22])
+        self.assertEqual(restored_times(), [[1, 12, 22]] * 3)
 
 
 if __name__ == '__main__':

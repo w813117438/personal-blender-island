@@ -11,7 +11,7 @@ if (!$BlenderExecutable) {
 if (!$LogDirectory) { $LogDirectory = Join-Path $sourceDir '.local-build/logs' }
 if (!(Test-Path -LiteralPath $BlenderExecutable -PathType Leaf)) { throw 'Compiled Blender is missing.' }
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
-$startupCheck = 'import bpy; assert hasattr(bpy.types, "ANIM_OT_island_inbetween"); assert hasattr(bpy.types, "GRAPH_PT_island_inbetween"); assert hasattr(bpy.types, "DOPESHEET_PT_island_inbetween_popover"); assert hasattr(bpy.types, "VIEW3D_PT_island_finger_picker"); assert bpy.context.scene.island_inbetween.frames == 1; print("Builtin registration OK", bpy.app.build_hash.decode())'
+$startupCheck = 'import bpy; assert hasattr(bpy.types, "ANIM_OT_island_inbetween"); assert hasattr(bpy.types, "GRAPH_PT_island_inbetween"); assert hasattr(bpy.types, "DOPESHEET_PT_island_inbetween_popover"); assert hasattr(bpy.types, "VIEW3D_PT_island_finger_picker"); assert bpy.context.scene.island_inbetween.frames == 1; assert bpy.context.scene.island_inbetween.scope == "CONTEXT"; assert {item.identifier: item.value for item in bpy.context.scene.island_inbetween.bl_rna.properties["scope"].enum_items} == {"CONTEXT": 0, "SCENE": 1, "EDITOR": 2}; print("Builtin registration OK", bpy.app.build_hash.decode())'
 & $BlenderExecutable --background --factory-startup --python-exit-code 1 --python-expr $startupCheck 2>&1 |
     Tee-Object -FilePath (Join-Path $LogDirectory 'builtin-startup-tests.log')
 if ($LASTEXITCODE -ne 0) { throw 'Built-in feature registration failed.' }

@@ -16,8 +16,11 @@ MODES = (
     ('SELECTED', '所选关键帧之间', '在相邻的所选关键帧列之间逐段调整间隔，后续关键帧累计顺延'),
 )
 SCOPES = (
-    ('CONTEXT', '当前选择 / 编辑器', '动画编辑器中使用可编辑曲线；3D 视口中使用所选物体或姿态骨骼'),
-    ('SCENE', '整个场景', '使用当前场景及其引用数据的活动动作，忽略物体选择和编辑器过滤'),
+    # Keep the saved v0.1.3 values: CONTEXT=0 and SCENE=1. The editor-specific
+    # behavior is now opt-in, so channel focus cannot split the default retiming.
+    ('CONTEXT', '选中物体 / 骨骼', '调整所选物体或姿态骨骼的全部动画通道，不受左侧通道筛选和曲线隐藏影响；跳过锁定通道', 0),
+    ('EDITOR', '按编辑器筛选', '仅调整动画编辑器中可见且可编辑的曲线；3D 视口中使用所选物体或姿态骨骼', 2),
+    ('SCENE', '整个场景', '使用当前场景及其引用数据的活动动作，忽略物体选择和编辑器过滤', 1),
 )
 MAX_FRAME = 1048574.0
 # Match BKE_fcurve_deduplicate_keys(), which is called by FCurve.update().
@@ -74,10 +77,10 @@ def collect_curves(context, scope):
     user_map = bpy.data.user_map()
     space = context.space_data
     editor = space and space.type in {'DOPESHEET_EDITOR', 'GRAPH_EDITOR'}
-    if scope == 'CONTEXT' and editor:
+    if scope == 'EDITOR' and editor:
         candidates = list(context.editable_fcurves or ())
     else:
-        pose = scope == 'CONTEXT' and context.mode == 'POSE'
+        pose = scope != 'SCENE' and context.mode == 'POSE'
         if pose:
             bones_by_object = defaultdict(list)
             for bone in context.selected_pose_bones or ():

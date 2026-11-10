@@ -35,9 +35,16 @@ def draw_inbetween_controls(layout, context):
     else:
         column.label(text="逐个调整所选关键帧之间的间隔")
         column.label(text="后续关键帧随之移动")
-    if settings.scope == 'CONTEXT' and context.area.type == 'VIEW_3D':
-        column.label(text="作用于所选物体或姿态骨骼")
+    if settings.scope == 'CONTEXT':
+        column.label(text="所选物体 / 骨骼的全部通道同步")
+        column.label(text="不受左侧通道筛选和曲线隐藏影响")
+    elif settings.scope == 'EDITOR':
+        if context.area.type == 'VIEW_3D':
+            column.label(text="作用于所选物体或姿态骨骼")
+        else:
+            column.label(text="仅调整编辑器中可见的可编辑曲线")
     column.separator()
+    column.label(text="锁定曲线和通道组仍会跳过")
     column.label(text="移除不会覆盖或删除关键帧", icon='INFO')
     column.label(text="仅支持活动动作，不支持 NLA")
 

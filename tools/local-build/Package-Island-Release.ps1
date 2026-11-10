@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = 'v0.1.3',
+    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = 'v0.1.4',
     [string]$BuildDirectory,
     [string]$OutputDirectory,
     [string]$StagingDirectory
@@ -148,6 +148,14 @@ assert bpy.context.scene is not None
 assert hasattr(bpy.types, 'ANIM_OT_island_inbetween')
 assert hasattr(bpy.types, 'VIEW3D_PT_island_finger_picker')
 assert bpy.context.scene.island_inbetween.frames == 1
+assert bpy.context.scene.island_inbetween.scope == 'CONTEXT'
+scope_values = {'CONTEXT': 0, 'SCENE': 1, 'EDITOR': 2}
+for scope_property in (
+    bpy.context.scene.island_inbetween.bl_rna.properties['scope'],
+    bpy.ops.anim.island_inbetween.get_rna_type().properties['scope'],
+):
+    assert scope_property.default == 'CONTEXT'
+    assert {item.identifier: item.value for item in scope_property.enum_items} == scope_values
 assert bpy.context.window_manager.keyconfigs.active.name == 'Blender'
 actual_config = os.path.normcase(os.path.realpath(bpy.utils.user_resource('CONFIG')))
 assert actual_config == os.path.normcase(os.path.realpath(config_path)), actual_config
