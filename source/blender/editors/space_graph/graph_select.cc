@@ -1762,6 +1762,10 @@ static wmOperatorStatus mouse_graph_keys(bAnimContext *ac,
         if (nvi->hpoint == NEAREST_HANDLE_KEY) {
           bezt->f2 ^= BEZT_FLAG_SELECT;
           something_was_selected = (bezt->f2 & SELECT);
+          if (!something_was_selected && (sipo->flag & SIPO_SELVHANDLESONLY)) {
+            bezt->f1 &= ~BEZT_FLAG_SELECT;
+            bezt->f3 &= ~BEZT_FLAG_SELECT;
+          }
         }
         else if (nvi->hpoint == NEAREST_HANDLE_LEFT) {
           /* toggle selection */

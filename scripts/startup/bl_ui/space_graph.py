@@ -65,6 +65,12 @@ class GRAPH_HT_header(Header):
         sub.active = st.use_normalization
         sub.prop(st, "use_auto_normalization", icon='FILE_REFRESH', text="", toggle=True)
 
+        row = layout.row(align=True)
+        row.prop(st, "show_handles", icon='HANDLE_ALIGNED', text="", toggle=True)
+        sub = row.row(align=True)
+        sub.active = st.show_handles
+        sub.prop(st, "use_only_selected_keyframe_handles", icon='RESTRICT_SELECT_OFF', text="", toggle=True)
+
         layout.separator_spacer()
 
         dopesheet_filter(layout, context)

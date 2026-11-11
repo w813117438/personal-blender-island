@@ -183,7 +183,7 @@ static void blo_update_defaults_screen(bScreen *screen,
     }
     else if (area.spacetype == SPACE_GRAPH) {
       SpaceGraph *sipo = area.spacedata.first_as<SpaceGraph>();
-      sipo->flag |= SIPO_SHOW_MARKERS;
+      sipo->flag |= SIPO_SHOW_MARKERS | SIPO_SELVHANDLESONLY | SIPO_SELVHANDLESONLY_INIT;
     }
     else if (area.spacetype == SPACE_NLA) {
       SpaceNla *snla = area.spacedata.first_as<SpaceNla>();

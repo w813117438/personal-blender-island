@@ -19,6 +19,7 @@
 #include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_sequence_types.h"
+#include "DNA_space_types.h"
 #include "DNA_view3d_types.h"
 #include "DNA_windowmanager_types.h"
 
@@ -559,6 +560,19 @@ void blo_do_versions_503(FileData * /*fd*/, Library * /*lib*/, Main *bmain)
    */
   for (Mesh &mesh : bmain->meshes) {
     bke::mesh_skin_to_generic(mesh);
+  }
+
+  for (bScreen &screen : bmain->screens) {
+    for (ScrArea &area : screen.areabase) {
+      for (SpaceLink &space : area.spacedata) {
+        if (space.spacetype == SPACE_GRAPH) {
+          SpaceGraph *sipo = reinterpret_cast<SpaceGraph *>(&space);
+          if ((sipo->flag & SIPO_SELVHANDLESONLY_INIT) == 0) {
+            sipo->flag |= SIPO_SELVHANDLESONLY | SIPO_SELVHANDLESONLY_INIT;
+          }
+        }
+      }
+    }
   }
 }
 

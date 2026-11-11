@@ -74,7 +74,7 @@ static SpaceLink *graph_create(const ScrArea * /*area*/, const Scene *scene)
 
   /* settings for making it easier by default to just see what you're interested in tweaking */
   sipo->ads->filterflag |= ADS_FILTER_ONLYSEL;
-  sipo->flag |= SIPO_SHOW_MARKERS;
+  sipo->flag |= SIPO_SHOW_MARKERS | SIPO_SELVHANDLESONLY | SIPO_SELVHANDLESONLY_INIT;
 
   /* header */
   region = BKE_area_region_new();
@@ -159,6 +159,9 @@ static void graph_init(wmWindowManager *wm, ScrArea *area)
     wmWindow *win = WM_window_find_by_area(wm, area);
     sipo->ads = MEM_new<bDopeSheet>("GraphEdit DopeSheet");
     sipo->ads->source = win ? id_cast<ID *>(WM_window_get_active_scene(win)) : nullptr;
+  }
+  if ((sipo->flag & SIPO_SELVHANDLESONLY_INIT) == 0) {
+    sipo->flag |= SIPO_SELVHANDLESONLY | SIPO_SELVHANDLESONLY_INIT;
   }
 
   /* force immediate init of any invalid F-Curve colors */

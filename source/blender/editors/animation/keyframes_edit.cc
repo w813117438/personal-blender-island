@@ -1556,6 +1556,10 @@ static short select_bezier_subtract(KeyframeEditData *ked, BezTriple *bezt)
   if ((ked) && (ked->iterflags & KEYFRAME_ITER_INCL_HANDLES) && handles_visible(ked, bezt)) {
     if (ked->curflags & KEYFRAME_OK_KEY) {
       bezt->f2 &= ~BEZT_FLAG_SELECT;
+      if (ked->iterflags & KEYFRAME_ITER_HANDLES_DEFAULT_INVISIBLE) {
+        bezt->f1 &= ~BEZT_FLAG_SELECT;
+        bezt->f3 &= ~BEZT_FLAG_SELECT;
+      }
     }
     if (ked->curflags & KEYFRAME_OK_H1) {
       bezt->f1 &= ~BEZT_FLAG_SELECT;

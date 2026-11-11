@@ -329,6 +329,8 @@ enum eGraphEdit_Flag : int {
   /* show markers region */
   SIPO_SHOW_MARKERS = (1 << 16),
   SIPO_NO_DRAW_EXTRAPOLATION = (1 << 17),
+  /* Internal flag: personal build initialized SIPO_SELVHANDLESONLY default on this space. */
+  SIPO_SELVHANDLESONLY_INIT = (1 << 18),
 };
 ENUM_OPERATORS(eGraphEdit_Flag)
 

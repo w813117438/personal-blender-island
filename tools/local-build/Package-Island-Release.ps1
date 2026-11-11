@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = 'v0.1.5',
+    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = 'v0.1.6',
     [string]$BuildDirectory,
     [string]$OutputDirectory,
     [string]$StagingDirectory
@@ -174,6 +174,11 @@ if bpy.app.build_options.international:
         bpy.app.translations.pgettext_iface('Cursor to Selected (World Location & Rotation)', 'Operator')
         == '游标 -> 选中项 (世界位置和旋转)'
     )
+graph_test_area = next(a for a in bpy.context.screen.areas if a.type == 'VIEW_3D')
+graph_test_area.type = 'GRAPH_EDITOR'
+assert graph_test_area.spaces.active.show_handles is True
+assert graph_test_area.spaces.active.use_only_selected_keyframe_handles is True
+graph_test_area.type = 'VIEW_3D'
 
 def decode(value):
     return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else str(value)
