@@ -2,6 +2,8 @@
 
 手指 Picker 已内置在 3D 视口的 **N → 手指选择** 页签，支持通用手动绑定和多选，绑定随 `.blend` 保存。用法见 [FINGER-PICKER.md](FINGER-PICKER.md)。
 
+子级约束空间切换已内置在 **属性 → 子级约束（Child Of）** 面板以及 3D 视口、摄影表、曲线编辑器的 **N → 动画工具 → 子级约束空间切换**，切换权重时保持世界位置与旋转且不破坏相邻动画。用法见 [CHILDOF-SPACE-SWITCH.md](CHILDOF-SPACE-SWITCH.md)。
+
 ## 插入 / 移除中间帧
 
 功能内置在源码的 `scripts/startup`，无需安装或启用插件。入口：

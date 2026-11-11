@@ -473,6 +473,31 @@ class CursorWorldSnapTest(unittest.TestCase):
                     rna = getattr(getattr(bpy.ops, op_namespace), op_name).get_rna_type()
                     self.assertIn('use_rotation', rna.properties)
 
+    def test_zh_hans_snap_menu_translations(self):
+        if not bpy.app.build_options.international:
+            return
+        view = bpy.context.preferences.view
+        prev_lang = view.language
+        prev_iface = view.use_translate_interface
+        try:
+            view.language = 'zh_HANS'
+            view.use_translate_interface = True
+            self.assertEqual(
+                bpy.app.translations.pgettext_iface(
+                    'Selection to Cursor (World Location & Rotation)', 'Operator'
+                ),
+                '选中项 -> 游标 (世界位置和旋转)',
+            )
+            self.assertEqual(
+                bpy.app.translations.pgettext_iface(
+                    'Cursor to Selected (World Location & Rotation)', 'Operator'
+                ),
+                '游标 -> 选中项 (世界位置和旋转)',
+            )
+        finally:
+            view.language = prev_lang
+            view.use_translate_interface = prev_iface
+
 
 if __name__ == '__main__':
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(CursorWorldSnapTest))

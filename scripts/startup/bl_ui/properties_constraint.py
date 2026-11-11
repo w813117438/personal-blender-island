@@ -170,6 +170,8 @@ class ConstraintButtonsPanel:
         row.operator("constraint.childof_clear_inverse")
 
         self.draw_influence(layout, con)
+        from .space_island_space_switch import draw_childof_constraint_ui
+        draw_childof_constraint_ui(layout, context, con)
 
     def draw_trackto(self, context):
         layout = self.layout

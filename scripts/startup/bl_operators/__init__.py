@@ -15,6 +15,7 @@ _modules = [
     "anim",
     "island_finger_picker",
     "island_inbetween",
+    "island_space_switch",
     "assets",
     "bone_selection_sets",
     "clip",
@@ -76,6 +77,7 @@ def register():
     bone_selection_sets.register()
     island_finger_picker.register()
     island_inbetween.register()
+    island_space_switch.register()
     copy_global_transform.register()
     project.register()
 
@@ -88,6 +90,7 @@ def unregister():
         island_finger_picker,
     )
 
+    island_space_switch.unregister()
     island_inbetween.unregister()
     island_finger_picker.unregister()
     bone_selection_sets.unregister()

@@ -535,6 +535,11 @@ static void rna_Constraint_influence_set(PointerRNA *ptr, float value)
     }
     data->flag |= SMART_CONSTRAINT_SWITCH_PENDING;
   }
+  else if (con->type == CONSTRAINT_TYPE_CHILDOF &&
+           !(ptr->owner_id->tag & ID_TAG_COPIED_ON_EVAL) && con->enforce != value)
+  {
+    ed::object::constraint_childof_influence_pre_set(ptr, con->enforce);
+  }
   con->enforce = value;
 }
 
@@ -546,10 +551,14 @@ static void rna_Constraint_update(Main *bmain, Scene * /*scene*/, PointerRNA *pt
 
 static void rna_Constraint_influence_update(Main *bmain, Scene *scene, PointerRNA *ptr)
 {
-  if (static_cast<bConstraint *>(ptr->data)->type == CONSTRAINT_TYPE_SMART &&
-      !(ptr->owner_id->tag & ID_TAG_COPIED_ON_EVAL))
-  {
-    ed::object::constraint_smart_influence_update(bmain, scene, ptr);
+  const auto *con = static_cast<const bConstraint *>(ptr->data);
+  if (!(ptr->owner_id->tag & ID_TAG_COPIED_ON_EVAL)) {
+    if (con->type == CONSTRAINT_TYPE_SMART) {
+      ed::object::constraint_smart_influence_update(bmain, scene, ptr);
+    }
+    else if (con->type == CONSTRAINT_TYPE_CHILDOF) {
+      ed::object::constraint_childof_influence_update(bmain, scene, ptr);
+    }
   }
   rna_Constraint_update(bmain, scene, ptr);
 }

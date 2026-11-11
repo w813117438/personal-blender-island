@@ -1,6 +1,6 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
-    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = 'v0.1.4',
+    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = 'v0.1.5',
     [string]$BuildDirectory,
     [string]$OutputDirectory,
     [string]$StagingDirectory
@@ -103,8 +103,8 @@ if (!(Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Bundled Python is
 
 # Check the installed built-ins, not just the executable timestamp or Git hash.
 $builtinFiles = @(
-    'bl_operators/island_inbetween.py', 'bl_operators/__init__.py',
-    'bl_ui/space_island_inbetween.py', 'bl_ui/__init__.py',
+    'bl_operators/island_inbetween.py', 'bl_operators/island_space_switch.py', 'bl_operators/constraint.py', 'bl_operators/__init__.py',
+    'bl_ui/space_island_inbetween.py', 'bl_ui/space_island_space_switch.py', 'bl_ui/properties_constraint.py', 'bl_ui/__init__.py',
     'bl_ui/space_dopesheet.py', 'bl_ui/space_graph.py'
 )
 foreach ($relative in $builtinFiles) {
@@ -123,7 +123,7 @@ $docs = Join-Path $program 'docs'
 New-Item -ItemType Directory -Path $config, $docs | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'COPYING') -Destination (Join-Path $program 'COPYING')
 foreach ($name in @('FINGER-PICKER.md', 'CURSOR-WORLD-SNAP.md', 'SMART-CONSTRAINT.md',
-                    'SMART-ROTATION-CONVERSION.md', 'TRANSFORM-CHANNELS-AND-HANDLES.md')) {
+                    'CHILDOF-SPACE-SWITCH.md', 'SMART-ROTATION-CONVERSION.md', 'TRANSFORM-CHANNELS-AND-HANDLES.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $docs
 }
 Copy-Item -LiteralPath $releaseNotes -Destination $docs
@@ -146,6 +146,8 @@ import bpy
 metadata_path, config_path = sys.argv[sys.argv.index('--') + 1:]
 assert bpy.context.scene is not None
 assert hasattr(bpy.types, 'ANIM_OT_island_inbetween')
+assert hasattr(bpy.types, 'CONSTRAINT_OT_island_childof_space_switch')
+assert hasattr(bpy.types, 'VIEW3D_PT_island_space_switch')
 assert hasattr(bpy.types, 'VIEW3D_PT_island_finger_picker')
 assert bpy.context.scene.island_inbetween.frames == 1
 assert bpy.context.scene.island_inbetween.scope == 'CONTEXT'
@@ -161,6 +163,17 @@ actual_config = os.path.normcase(os.path.realpath(bpy.utils.user_resource('CONFI
 assert actual_config == os.path.normcase(os.path.realpath(config_path)), actual_config
 assert bpy.ops.wm.save_userpref() == {'FINISHED'}
 assert (Path(config_path) / 'userpref.blend').is_file()
+if bpy.app.build_options.international:
+    bpy.context.preferences.view.language = 'zh_HANS'
+    bpy.context.preferences.view.use_translate_interface = True
+    assert (
+        bpy.app.translations.pgettext_iface('Selection to Cursor (World Location & Rotation)', 'Operator')
+        == '选中项 -> 游标 (世界位置和旋转)'
+    )
+    assert (
+        bpy.app.translations.pgettext_iface('Cursor to Selected (World Location & Rotation)', 'Operator')
+        == '游标 -> 选中项 (世界位置和旋转)'
+    )
 
 def decode(value):
     return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else str(value)
@@ -226,7 +239,7 @@ blender-island $Version (Blender $($compiled.blender_version))
 完整解压后运行 blender-island.exe。
 中间帧入口：时间轴 / 摄影表 / 曲线编辑器顶栏 → 中间帧。
 3D 视口侧栏：N → 动画工具。
-使用说明：docs/INBETWEEN.md 和 docs/FINGER-PICKER.md。
+使用说明：docs/CHILDOF-SPACE-SWITCH.md、docs/INBETWEEN.md、docs/FINGER-PICKER.md。
 本包使用 Blender 默认操作方案，配置独立保存在 portable/config。
 源码提交、程序构建标识及 SHA256 记录在 version.json。
 源码：https://github.com/w813117438/personal-blender-island

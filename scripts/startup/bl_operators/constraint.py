@@ -85,6 +85,9 @@ class CONSTRAINT_OT_disable_keep_transform(Operator):
 
     def execute(self, context):
         """Disable constraint while maintaining the visual transform"""
+        if getattr(context, "constraint", None) is not None and context.constraint.type == 'CHILD_OF':
+            from .island_space_switch import disable_childof_keep_transform
+            return disable_childof_keep_transform(context, context.constraint)
 
         # This works most of the time, but when there are multiple constraints active
         # there could still be one that overrides the visual transform.

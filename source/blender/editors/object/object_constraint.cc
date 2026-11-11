@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include <fmt/format.h>
+
 #include "MEM_guardedalloc.h"
 
 #include "BLI_dynstr.hh"
@@ -17,6 +19,7 @@
 #include "BLI_math_matrix_c.hh"
 #include "BLI_math_vector_c.hh"
 #include "BLI_string_utf8.hh"
+#include "BLI_threads.hh"
 #include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
@@ -50,6 +53,7 @@
 
 #ifdef WITH_PYTHON
 #  include "BPY_extern.hh"
+#  include "BPY_extern_run.hh"
 #endif
 
 #include "WM_api.hh"
@@ -216,6 +220,230 @@ void constraint_smart_influence_update(Main *bmain, Scene *scene, PointerRNA *pt
   data->flag &= ~SMART_CONSTRAINT_SWITCH_PENDING;
   DEG_id_tag_update(&ob->id, ID_RECALC_ANIMATION | ID_RECALC_TRANSFORM | ID_RECALC_SYNC_TO_EVAL);
   WM_main_add_notifier(NC_ANIMATION | ND_KEYFRAME | NA_ADDED, nullptr);
+}
+
+#ifdef WITH_PYTHON
+namespace {
+
+struct ChildOfPendingSwitch {
+  const Object *ob = nullptr;
+  const bConstraint *con = nullptr;
+  float previous_influence = 0.0f;
+  bool had_fcurve = false;
+  Vector<BezTriple> previous_bezt;
+};
+
+bool g_childof_space_switch_active = false;
+ChildOfPendingSwitch g_pending_childof;
+
+}  // namespace
+#endif
+
+void constraint_childof_influence_pre_set(PointerRNA *ptr, const float previous_influence)
+{
+#ifdef WITH_PYTHON
+  if (g_childof_space_switch_active || !BLI_thread_is_main() || !ptr || !ptr->owner_id ||
+      !ptr->data)
+  {
+    return;
+  }
+  Object *ob = id_cast<Object *>(ptr->owner_id);
+  auto *con = static_cast<bConstraint *>(ptr->data);
+  auto *data = static_cast<bChildOfConstraint *>(con->data);
+  if (!ID_IS_EDITABLE(ob) || !data || !data->tar || (con->flag & CONSTRAINT_OFF) ||
+      (data->flag & CHILDOF_SET_INVERSE))
+  {
+    g_pending_childof = {};
+    return;
+  }
+
+  ChildOfPendingSwitch snapshot;
+  snapshot.ob = ob;
+  snapshot.con = con;
+  snapshot.previous_influence = previous_influence;
+  if (PropertyRNA *inf_prop = RNA_struct_find_property(ptr, "influence")) {
+    if (const std::optional<std::string> inf_path = RNA_path_from_ID_to_property(ptr, inf_prop)) {
+      if (ob->adt && ob->adt->action) {
+        for (FCurve *fcu :
+             animrig::fcurves_for_action_slot(ob->adt->action->wrap(), ob->adt->slot_handle))
+        {
+          if (fcu->rna_path() == *inf_path && fcu->array_index == 0) {
+            snapshot.had_fcurve = true;
+            if (fcu->bezt && fcu->totvert > 0) {
+              snapshot.previous_bezt = Span<BezTriple>(fcu->bezt, fcu->totvert);
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+  g_pending_childof = std::move(snapshot);
+#else
+  UNUSED_VARS(ptr, previous_influence);
+#endif
+}
+
+void constraint_childof_influence_update(Main *bmain, Scene *scene, PointerRNA *ptr)
+{
+#ifdef WITH_PYTHON
+  if (g_childof_space_switch_active || !bmain || !scene || !BLI_thread_is_main() || !ptr ||
+      !ptr->owner_id || !ptr->data)
+  {
+    return;
+  }
+  Object *ob = id_cast<Object *>(ptr->owner_id);
+  auto *con = static_cast<bConstraint *>(ptr->data);
+  if (g_pending_childof.ob != ob || g_pending_childof.con != con) {
+    return;
+  }
+  ChildOfPendingSwitch pending = std::move(g_pending_childof);
+  g_pending_childof = {};
+
+  const float requested = con->enforce;
+  if (requested == pending.previous_influence || !ID_IS_EDITABLE(ob)) {
+    return;
+  }
+
+  const bool from_python = BPY_python_current_file_and_line().has_value();
+
+  g_childof_space_switch_active = true;
+  bContext *C = CTX_create();
+  CTX_data_main_set(C, bmain);
+  if (wmWindowManager *wm = bmain->wm.first()) {
+    CTX_wm_manager_set(C, wm);
+    wmWindow *target_win = nullptr;
+    for (wmWindow &win : wm->windows) {
+      if (WM_window_get_active_scene(&win) == scene) {
+        target_win = &win;
+        if (win.active) {
+          break;
+        }
+      }
+    }
+    if (!target_win) {
+      target_win = wm->windows.first();
+    }
+    if (target_win) {
+      CTX_wm_window_set(C, target_win);
+      CTX_wm_screen_set(C, WM_window_get_active_screen(target_win));
+    }
+  }
+  CTX_data_scene_set(C, scene);
+
+  const std::string check_expr = fmt::format(
+      "int(bool((_m := __import__('sys').modules.get('bl_operators.island_space_switch')) and "
+      "_m._can_auto_switch_childof({}, {}, {})))",
+      uintptr_t(ob),
+      uintptr_t(con),
+      from_python ? "True" : "False");
+  intptr_t can_switch = 0;
+  const bool check_ok = BPY_run_string_as_intptr(
+      C, nullptr, check_expr.c_str(), nullptr, &can_switch);
+  if (check_ok && can_switch == 1) {
+    /* Revert any premature keyframe inserted by apply_but_autokey before sampling pre-switch pose. */
+    FCurve *mutated_fcu = nullptr;
+    Vector<BezTriple> autokey_backup;
+    bool autokey_created_fcu = false;
+    if (PropertyRNA *inf_prop = RNA_struct_find_property(ptr, "influence")) {
+      if (const std::optional<std::string> inf_path = RNA_path_from_ID_to_property(ptr, inf_prop)) {
+        if (ob->adt && ob->adt->action) {
+          for (FCurve *fcu :
+               animrig::fcurves_for_action_slot(ob->adt->action->wrap(), ob->adt->slot_handle))
+          {
+            if (fcu->rna_path() == *inf_path && fcu->array_index == 0) {
+              mutated_fcu = fcu;
+              break;
+            }
+          }
+          if (mutated_fcu) {
+            if (mutated_fcu->bezt && mutated_fcu->totvert > 0) {
+              autokey_backup = Span<BezTriple>(mutated_fcu->bezt, mutated_fcu->totvert);
+            }
+            if (!pending.had_fcurve) {
+              autokey_created_fcu = true;
+              animrig::action_fcurve_remove(ob->adt->action->wrap(), *mutated_fcu);
+              mutated_fcu = nullptr;
+            }
+            else {
+              BKE_fcurve_active_keyframe_set(mutated_fcu, nullptr);
+              if (mutated_fcu->bezt) {
+                MEM_delete(mutated_fcu->bezt);
+                mutated_fcu->bezt = nullptr;
+              }
+              mutated_fcu->totvert = pending.previous_bezt.size();
+              if (mutated_fcu->totvert > 0) {
+                mutated_fcu->bezt = MEM_new_array_zeroed<BezTriple>(mutated_fcu->totvert,
+                                                                    "beztriple");
+                memcpy(mutated_fcu->bezt,
+                       pending.previous_bezt.data(),
+                       sizeof(BezTriple) * mutated_fcu->totvert);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    con->enforce = pending.previous_influence;
+    DEG_id_tag_update(
+        &ob->id,
+        ID_RECALC_TRANSFORM | ID_RECALC_SYNC_TO_EVAL |
+            (ob->type == OB_ARMATURE ? ID_RECALC_GEOMETRY : 0));
+
+    const std::string exec_expr = fmt::format(
+        "int(bool(__import__('sys').modules['bl_operators.island_space_switch']"
+        "._execute_auto_childof_switch({}, {}, {:.9g}, {:.9g}, {})))",
+        uintptr_t(ob),
+        uintptr_t(con),
+        pending.previous_influence,
+        requested,
+        pending.had_fcurve ? "True" : "False");
+    intptr_t switched = 0;
+    const bool exec_ok = BPY_run_string_as_intptr(
+        C, nullptr, exec_expr.c_str(), nullptr, &switched);
+    if (!exec_ok || switched != 1) {
+      con->enforce = requested;
+      if (autokey_created_fcu && !autokey_backup.is_empty() && ob->adt && ob->adt->action) {
+        const AnimationEvalContext eval_ctx = BKE_animsys_eval_context_construct(
+            BKE_scene_get_depsgraph(scene, BKE_view_layer_default_view(scene)),
+            BKE_scene_frame_get(scene));
+        Vector<RNAPath> paths = {{"influence"}};
+        animrig::insert_keyframes(bmain,
+                                  ptr,
+                                  std::nullopt,
+                                  paths.as_span(),
+                                  BKE_scene_frame_get(scene),
+                                  eval_ctx,
+                                  BEZT_KEYTYPE_KEYFRAME,
+                                  INSERTKEY_NOFLAGS);
+      }
+      else if (mutated_fcu) {
+        BKE_fcurve_active_keyframe_set(mutated_fcu, nullptr);
+        if (mutated_fcu->bezt) {
+          MEM_delete(mutated_fcu->bezt);
+          mutated_fcu->bezt = nullptr;
+        }
+        mutated_fcu->totvert = autokey_backup.size();
+        if (mutated_fcu->totvert > 0) {
+          mutated_fcu->bezt = MEM_new_array_zeroed<BezTriple>(mutated_fcu->totvert, "beztriple");
+          memcpy(mutated_fcu->bezt, autokey_backup.data(), sizeof(BezTriple) * mutated_fcu->totvert);
+        }
+      }
+    }
+    else {
+      DEG_id_tag_update(
+          &ob->id,
+          ID_RECALC_ANIMATION | ID_RECALC_TRANSFORM | ID_RECALC_GEOMETRY | ID_RECALC_SYNC_TO_EVAL);
+      WM_main_add_notifier(NC_ANIMATION | ND_KEYFRAME | NA_ADDED, nullptr);
+    }
+  }
+
+  CTX_free(C);
+  g_childof_space_switch_active = false;
+#else
+  UNUSED_VARS(bmain, scene, ptr);
+#endif
 }
 
 /* ------------------------------------------------------------------- */

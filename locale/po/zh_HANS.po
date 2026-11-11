@@ -165513,10 +165513,18 @@ msgid "Distance from the ground plane"
 msgstr "距地平面距离"
 
 msgid "Selection to Cursor (World Location & Rotation)"
-msgstr "选中项 → 游标（世界位置和旋转）"
+msgstr "选中项 -> 游标 (世界位置和旋转)"
+
+msgctxt "Operator"
+msgid "Selection to Cursor (World Location & Rotation)"
+msgstr "选中项 -> 游标 (世界位置和旋转)"
 
 msgid "Cursor to Selected (World Location & Rotation)"
-msgstr "游标 → 选中项（世界位置和旋转）"
+msgstr "游标 -> 选中项 (世界位置和旋转)"
+
+msgctxt "Operator"
+msgid "Cursor to Selected (World Location & Rotation)"
+msgstr "游标 -> 选中项 (世界位置和旋转)"
 
 msgid "World Rotation"
 msgstr "世界旋转"

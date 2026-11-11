@@ -95,6 +95,7 @@ _modules = [
     "space_view3d_toolbar",
     "space_view3d_island_picker",
     "space_island_inbetween",
+    "space_island_space_switch",
 
     # XXX, keep last so panels show after all other tool options.
     "properties_workspace",
