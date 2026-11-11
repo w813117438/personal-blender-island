@@ -249,7 +249,7 @@ blender-island $Version (Blender $($compiled.blender_version))
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::CreateFromDirectory($program, $package, [IO.Compression.CompressionLevel]::Optimal, $true)
     # Read every compressed entry and verify its CRC using Blender's bundled Python.
-    $archiveCheck = 'import sys,zipfile; p=sys.argv[1]; z=zipfile.ZipFile(p); bad=z.testzip(); assert bad is None, bad; print("ZIP_CRC_OK", len(z.infolist()), "entries"); z.close()'
+    $archiveCheck = "import sys,zipfile; p=sys.argv[1]; z=zipfile.ZipFile(p); bad=z.testzip(); assert bad is None, bad; print('ZIP_CRC_OK', len(z.infolist()), 'entries'); z.close()"
     & $python -I -S -c $archiveCheck $package
     if ($LASTEXITCODE -ne 0) { throw 'Release ZIP integrity/CRC validation failed.' }
 } finally {
